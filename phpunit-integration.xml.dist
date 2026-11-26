@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<phpunit
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+	bootstrap="tests/integration/bootstrap.php"
+	colors="true"
+	beStrictAboutTestsThatDoNotTestAnything="true"
+	failOnRisky="true"
+	failOnWarning="true"
+	convertErrorsToExceptions="false"
+	convertNoticesToExceptions="false"
+	convertWarningsToExceptions="false"
+	convertDeprecationsToExceptions="false"
+	cacheResult="false"
+>
+	<testsuites>
+		<testsuite name="integration">
+			<directory suffix="Test.php">tests/integration</directory>
+		</testsuite>
+	</testsuites>
+	<php>
+		<ini name="error_reporting" value="-1"/>
+	</php>
+</phpunit>

@@ -1,0 +1,81 @@
+# Keeps composer.lock files in sync with composer.json on feature branches.
+# When a branch changes a composer.json without a matching lock, this resolves the lock with
+# minimal changes on the lowest supported platform (config.platform.php = 8.1) and commits it back.
+# Broad version bumps are left to Dependabot. Pushes made with GITHUB_TOKEN do not trigger other
+# workflows, so push a follow-up commit (or re-run CI) after the bot commit lands.
+name: Lockfiles
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - composer.json
+      - composer.lock
+      - 'tools/*/composer.json'
+      - 'tools/*/composer.lock'
+      - .github/workflows/lockfiles.yml
+
+permissions: {}
+
+concurrency:
+  group: lockfiles-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync composer.lock files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.ref != 'refs/heads/main' && github.actor != 'dependabot[bot]'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer:v2
+
+      - name: Refuse committed vendor directories
+        run: |
+          if git ls-files --error-unmatch vendor 'tools/*/vendor' >/dev/null 2>&1; then
+            echo "::error::vendor/ must never be committed"
+            exit 1
+          fi
+
+      - name: Update stale lock files (no plugins, no scripts, minimal changes)
+        id: update
+        run: |
+          changed=0
+          for manifest in composer.json tools/*/composer.json; do
+            [ -f "$manifest" ] || continue
+            dir=$(dirname "$manifest")
+            if [ ! -f "$dir/composer.lock" ] || ! (cd "$dir" && composer validate --no-plugins --no-check-publish --no-check-all --strict >/dev/null 2>&1); then
+              echo "Updating lock in $dir"
+              (cd "$dir" && composer update --minimal-changes --no-interaction --no-progress --no-install --no-plugins --no-scripts)
+              changed=1
+            fi
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Commit lock files
+        if: steps.update.outputs.changed == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          for lock in composer.lock tools/*/composer.lock; do
+            [ -f "$lock" ] && git add "$lock"
+          done
+          if git diff --cached --quiet; then
+            echo "Lock files already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Sync composer.lock with composer.json"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${REF_NAME}"
