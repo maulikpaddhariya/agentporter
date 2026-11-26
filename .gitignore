@@ -1,0 +1,37 @@
+# Dependencies
+/vendor/
+/node_modules/
+
+# Build output (release zips are built in CI)
+/build/
+/dist/
+/assets/build/
+*.zip
+
+# Tool caches and reports
+.phpunit.result.cache
+.phpunit.cache/
+.phpcs-cache
+.php-cs-fixer.cache
+/coverage/
+/reports/
+/test-results/
+/playwright-report/
+/blob-report/
+/.psalm-cache/
+/.phpstan-cache/
+/infection.log
+/infection-*.log
+.eslintcache
+.stylelintcache
+
+# Local environment
+.env
+.env.*
+!.env.example
+.wp-env.override.json
+wp-tests-config.php
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
