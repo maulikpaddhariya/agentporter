@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<ruleset xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="AgentPorter" xsi:noNamespaceSchemaLocation="vendor/squizlabs/php_codesniffer/phpcs.xsd">
+	<description>AgentPorter coding standard: WordPress Extra + Docs, WordPress VIP Go and PHPCompatibilityWP (PHP 8.1+).</description>
+
+	<file>.</file>
+
+	<exclude-pattern>/vendor/*</exclude-pattern>
+	<exclude-pattern>/node_modules/*</exclude-pattern>
+	<exclude-pattern>/build/*</exclude-pattern>
+	<exclude-pattern>/dist/*</exclude-pattern>
+	<exclude-pattern>/assets/build/*</exclude-pattern>
+	<exclude-pattern>/tools/*/vendor/*</exclude-pattern>
+	<!-- Deliberately broken files used to prove that each gate fails. Never shipped. -->
+	<exclude-pattern>/tests/seeded/fixtures/*</exclude-pattern>
+
+	<arg name="extensions" value="php"/>
+	<arg name="basepath" value="."/>
+	<arg name="parallel" value="8"/>
+	<arg name="cache" value=".phpcs-cache"/>
+	<arg value="sp"/>
+
+	<!-- Syntax ceiling: PHP 8.1. -->
+	<config name="testVersion" value="8.1-"/>
+	<config name="minimum_wp_version" value="6.9"/>
+
+	<rule ref="WordPress-Extra"/>
+	<rule ref="WordPress-Docs"/>
+	<rule ref="WordPress-VIP-Go"/>
+	<rule ref="PHPCompatibilityWP"/>
+
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="agentporter"/>
+			</property>
+		</properties>
+	</rule>
+
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="agentporter"/>
+				<element value="AgentPorter"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!--
+	Justification: src/ uses PSR-4 class files (AgentPorter\Foo\Bar => src/Foo/Bar.php),
+	as required by ARCHITECTURE.md §10. WordPress file naming (class-foo-bar.php) does not apply there.
+	-->
+	<rule ref="WordPress.Files.FileName">
+		<exclude-pattern>/src/*</exclude-pattern>
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
+	<!-- Tests follow PHPUnit conventions (camelCase test methods, PSR-4 classes). -->
+	<rule ref="WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.NamingConventions.ValidVariableName">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
+	<!--
+	Justification: test methods are named as sentences (test_guard_denies_when_kill_switch_is_on),
+	so a doc comment would only repeat the name. Production code under src/ keeps full DocBlocks.
+	-->
+	<rule ref="Squiz.Commenting.FunctionComment.Missing">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="Generic.Commenting.DocComment.MissingShort">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
+	<!--
+	Justification: VIP file-system rules target code running on a VIP web node. Tests and bin/ scripts
+	run only in CI or on a developer machine and write to STDERR or temp files. Never shipped (.distignore).
+	-->
+	<rule ref="WordPressVIPMinimum.Functions.RestrictedFunctions">
+		<exclude-pattern>/tests/*</exclude-pattern>
+		<exclude-pattern>/bin/*</exclude-pattern>
+	</rule>
+</ruleset>

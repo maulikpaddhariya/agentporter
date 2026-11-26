@@ -1,0 +1,60 @@
+# Weekly compatibility CI: database variants (MySQL 5.7/8.4, MariaDB 10.4–11.x), SQLite smoke,
+# WooCommerce latest-1/latest-2/beta, WordPress nightly and PHP in development.
+name: CI (weekly)
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  databases:
+    name: Databases
+    strategy:
+      fail-fast: false
+      matrix:
+        db: ['mysql:5.7', 'mysql:8.4', 'mariadb:10.4', 'mariadb:10.6', 'mariadb:10.11', 'mariadb:11.4', 'mariadb:11.8']
+    uses: ./.github/workflows/_phpunit.yml
+    with:
+      php: '8.3'
+      wp: latest
+      woo: latest
+      db-image: ${{ matrix.db }}
+
+  sqlite:
+    name: SQLite smoke
+    uses: ./.github/workflows/_phpunit.yml
+    with:
+      php: '8.3'
+      wp: latest
+      db-engine: sqlite
+
+  woocommerce-versions:
+    name: WooCommerce versions
+    strategy:
+      fail-fast: false
+      matrix:
+        woo: [latest-1, latest-2, beta]
+    uses: ./.github/workflows/_phpunit.yml
+    with:
+      php: '8.3'
+      wp: latest
+      woo: ${{ matrix.woo }}
+      experimental: ${{ matrix.woo == 'beta' }}
+
+  edge:
+    name: Edge
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.5', wp: nightly }
+          - { php: '8.6', wp: latest }
+    uses: ./.github/workflows/_phpunit.yml
+    with:
+      php: ${{ matrix.php }}
+      wp: ${{ matrix.wp }}
+      experimental: true

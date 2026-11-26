@@ -1,0 +1,97 @@
+# Reusable PHPUnit job: one matrix cell (PHP × WordPress × WooCommerce × multisite × database).
+name: PHPUnit (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      php:
+        type: string
+        required: true
+      wp:
+        type: string
+        default: latest
+      woo:
+        type: string
+        default: ''
+        description: WooCommerce version to install ('' = none, 'latest', 'beta' or an exact version).
+      multisite:
+        type: boolean
+        default: false
+      db-image:
+        type: string
+        default: mysql:8.0
+      db-engine:
+        type: string
+        default: mysql
+        description: "'mysql' (MySQL/MariaDB service) or 'sqlite' (SQLite drop-in smoke test)."
+      experimental:
+        type: boolean
+        default: false
+        description: Allowed to fail (WordPress nightly, PHP in development).
+
+permissions:
+  contents: read
+
+jobs:
+  phpunit:
+    name: PHP ${{ inputs.php }} · WP ${{ inputs.wp }}${{ inputs.woo != '' && format(' · Woo {0}', inputs.woo) || '' }}${{ inputs.multisite && ' · multisite' || '' }} · ${{ inputs.db-engine == 'sqlite' && 'sqlite' || inputs.db-image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    continue-on-error: ${{ inputs.experimental }}
+    services:
+      database:
+        image: ${{ inputs.db-engine == 'mysql' && inputs.db-image || '' }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wordpress_test
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot || mariadb-admin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      WP_CORE_DIR: /tmp/wordpress
+      WP_TESTS_DIR: /tmp/wordpress-tests-lib
+      WP_MULTISITE: ${{ inputs.multisite && '1' || '0' }}
+      AGENTPORTER_WITH_WOO: ${{ inputs.woo != '' && '1' || '0' }}
+      DB_ENGINE: ${{ inputs.db-engine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ inputs.php }}
+          extensions: mysqli, sodium, mbstring, json, pdo_sqlite
+          ini-values: error_reporting=-1, display_errors=On, zend.assertions=1
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --no-progress
+
+      - name: Install WordPress ${{ inputs.wp }} and the test library
+        run: bin/install-wp-tests.sh wordpress_test root root 127.0.0.1:3306 "${{ inputs.wp }}" true
+
+      - name: Install WooCommerce ${{ inputs.woo }}
+        if: inputs.woo != ''
+        run: bin/install-woocommerce.sh "${{ inputs.woo }}"
+
+      - name: Unit tests
+        run: composer test:unit
+
+      - name: Integration tests
+        run: composer test:integration

@@ -1,0 +1,72 @@
+{
+	"name": "maulikpaddhariya/agentporter",
+	"description": "See, control, improve and serve AI traffic and AI agents on WordPress and WooCommerce.",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"homepage": "https://github.com/maulikpaddhariya/agentporter",
+	"support": {
+		"issues": "https://github.com/maulikpaddhariya/agentporter/issues",
+		"source": "https://github.com/maulikpaddhariya/agentporter"
+	},
+	"require": {
+		"php": ">=8.1"
+	},
+	"require-dev": {
+		"automattic/vipwpcs": "^3.1",
+		"brain/monkey": "^2.6",
+		"dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+		"php-stubs/woocommerce-stubs": "^11.0",
+		"php-stubs/wordpress-stubs": "^7.0",
+		"phpcompatibility/php-compatibility": "10.0.0-alpha2",
+		"phpcompatibility/phpcompatibility-paragonie": "2.0.0-alpha3",
+		"phpcompatibility/phpcompatibility-wp": "3.0.0-alpha3",
+		"phpstan/phpstan": "^2.1",
+		"phpstan/phpstan-deprecation-rules": "^2.0",
+		"phpunit/phpunit": "^9.6.20",
+		"rector/rector": "^2.0",
+		"squizlabs/php_codesniffer": "^3.13",
+		"szepeviktor/phpstan-wordpress": "^2.0",
+		"wp-coding-standards/wpcs": "^3.4",
+		"yoast/phpunit-polyfills": "^4.0"
+	},
+	"minimum-stability": "stable",
+	"prefer-stable": true,
+	"autoload": {
+		"psr-4": {
+			"AgentPorter\\": "src/"
+		}
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"AgentPorter\\Tests\\Support\\": "tests/Support/"
+		}
+	},
+	"config": {
+		"platform": {
+			"php": "8.1.99"
+		},
+		"sort-packages": true,
+		"optimize-autoloader": true,
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		}
+	},
+	"scripts": {
+		"lint": "phpcs",
+		"lint:fix": "phpcbf",
+		"lint:syntax": "bin/lint-syntax.sh",
+		"test": [
+			"@test:unit",
+			"@test:integration"
+		],
+		"test:unit": "phpunit -c phpunit.xml.dist",
+		"test:integration": "phpunit -c phpunit-integration.xml.dist",
+		"test:seeded": "bin/check-seeded-violations.sh"
+	},
+	"scripts-descriptions": {
+		"lint": "PHPCS: WordPress Extra + Docs + VIP Go + PHPCompatibilityWP (8.1+).",
+		"lint:syntax": "Lints every PHP file with the PHP binary in use (run on PHP 8.1 to enforce the syntax ceiling).",
+		"test": "PHPUnit unit + integration. Fails on any notice, warning or deprecation raised by AgentPorter code.",
+		"test:seeded": "Proves the gates fail on seeded violations (PHP 8.2+ syntax, deprecations)."
+	}
+}

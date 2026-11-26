@@ -1,0 +1,59 @@
+# Keeps composer.lock files in sync with composer.json on feature branches.
+# When a branch changes a composer.json without a matching lock, this resolves the lock on the
+# lowest supported platform (config.platform.php = 8.1) and commits it back to the branch.
+# Pushes made with GITHUB_TOKEN do not trigger other workflows, so push a follow-up commit
+# (or re-run CI) after the bot commit lands.
+name: Lockfiles
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - composer.json
+      - composer.lock
+      - 'tools/*/composer.json'
+      - 'tools/*/composer.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lockfiles-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync composer.lock files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer:v2
+      - name: Update stale lock files
+        id: update
+        run: |
+          changed=0
+          for manifest in composer.json tools/*/composer.json; do
+            [ -f "$manifest" ] || continue
+            dir=$(dirname "$manifest")
+            if ! (cd "$dir" && composer validate --no-check-publish --no-check-all --strict >/dev/null 2>&1); then
+              echo "Updating lock in $dir"
+              (cd "$dir" && composer update --no-interaction --no-progress --no-install --no-scripts)
+              changed=1
+            fi
+          done
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+      - name: Commit lock files
+        if: steps.update.outputs.changed == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add composer.lock tools/*/composer.lock 2>/dev/null || true
+          git commit -m "Sync composer.lock with composer.json"
+          git push

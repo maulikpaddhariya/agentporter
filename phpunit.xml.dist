@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<phpunit
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+	bootstrap="tests/unit/bootstrap.php"
+	colors="true"
+	beStrictAboutOutputDuringTests="true"
+	beStrictAboutTestsThatDoNotTestAnything="true"
+	failOnRisky="true"
+	failOnWarning="true"
+	convertErrorsToExceptions="false"
+	convertNoticesToExceptions="false"
+	convertWarningsToExceptions="false"
+	convertDeprecationsToExceptions="false"
+	executionOrder="random"
+	cacheResult="false"
+>
+	<testsuites>
+		<testsuite name="unit">
+			<directory suffix="Test.php">tests/unit</directory>
+		</testsuite>
+	</testsuites>
+	<coverage processUncoveredFiles="false">
+		<include>
+			<directory suffix=".php">src</directory>
+		</include>
+	</coverage>
+	<php>
+		<ini name="error_reporting" value="-1"/>
+		<ini name="display_errors" value="1"/>
+	</php>
+</phpunit>
