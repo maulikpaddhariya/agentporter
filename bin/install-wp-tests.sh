@@ -5,8 +5,9 @@
 #   wp-version: "latest" (default), "nightly"/"trunk", "X.Y" (latest X.Y.Z) or "X.Y.Z".
 #
 # Environment:
-#   WP_CORE_DIR   default: $TMPDIR/wordpress
-#   WP_TESTS_DIR  default: $TMPDIR/wordpress-tests-lib
+#   WP_CORE_DIR   default: ${XDG_CACHE_HOME:-$HOME/.cache}/agentporter/wordpress
+#   WP_TESTS_DIR  default: ${XDG_CACHE_HOME:-$HOME/.cache}/agentporter/wordpress-tests-lib
+#   (per-user defaults: never reuse a shared /tmp folder another user could have planted)
 #   DB_ENGINE     "mysql" (default) or "sqlite" (local runs without a MySQL server)
 #
 # Sources are the official GitHub mirrors: WordPress/WordPress (built core) and
@@ -26,10 +27,27 @@ WP_VERSION=${5-latest}
 SKIP_DB_CREATE=${6-false}
 DB_ENGINE=${DB_ENGINE:-mysql}
 
-TMPDIR=${TMPDIR-/tmp}
-TMPDIR=$(echo "$TMPDIR" | sed -e "s/\/$//")
-WP_CORE_DIR=${WP_CORE_DIR-$TMPDIR/wordpress}
-WP_TESTS_DIR=${WP_TESTS_DIR-$TMPDIR/wordpress-tests-lib}
+CACHE_ROOT=${XDG_CACHE_HOME:-$HOME/.cache}/agentporter
+WP_CORE_DIR=${WP_CORE_DIR-$CACHE_ROOT/wordpress}
+WP_TESTS_DIR=${WP_TESTS_DIR-$CACHE_ROOT/wordpress-tests-lib}
+SQLITE_PLUGIN_TAG=v3.1.3
+
+if [[ ! "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]; then
+	echo "Database name may only contain letters, digits and underscores." >&2
+	exit 1
+fi
+
+# Refuse to reuse existing folders owned by someone else.
+for dir in "$WP_CORE_DIR" "$WP_TESTS_DIR"; do
+	if [ -e "$dir" ] && [ ! -O "$dir" ]; then
+		echo "$dir exists but is not owned by $(id -un); refusing to use it." >&2
+		exit 1
+	fi
+done
+
+TMP_DIRS=()
+cleanup() { for d in "${TMP_DIRS[@]+"${TMP_DIRS[@]}"}"; do rm -rf "$d"; done; }
+trap cleanup EXIT
 
 CORE_REPO=https://github.com/WordPress/WordPress
 DEVELOP_REPO=https://github.com/WordPress/wordpress-develop
@@ -82,13 +100,13 @@ install_test_suite() {
 	else
 		local src
 		src=$(mktemp -d)
+		TMP_DIRS+=("$src")
 		git -c advice.detachedHead=false clone -q --depth 1 --filter=blob:none --sparse --branch "$REF" "$DEVELOP_REPO" "$src"
 		git -C "$src" sparse-checkout set tests/phpunit/includes tests/phpunit/data
 		mkdir -p "$WP_TESTS_DIR"
 		cp -R "$src/tests/phpunit/includes" "$WP_TESTS_DIR/includes"
 		cp -R "$src/tests/phpunit/data" "$WP_TESTS_DIR/data"
 		cp "$src/wp-tests-config-sample.php" "$WP_TESTS_DIR/wp-tests-config-sample.php"
-		rm -rf "$src"
 	fi
 
 	local config="$WP_TESTS_DIR/wp-tests-config.php"
@@ -98,12 +116,16 @@ install_test_suite() {
 	php -r '
 		[$file, $abspath, $name, $user, $pass, $host] = array_slice($argv, 1);
 		$c = file_get_contents($file);
-		$c = str_replace("dirname( __FILE__ ) . \x27/src/\x27", var_export(rtrim($abspath, "/") . "/", true), $c);
-		$c = str_replace("__DIR__ . \x27/src/\x27", var_export(rtrim($abspath, "/") . "/", true), $c);
-		$c = str_replace("youremptytestdbnamehere", $name, $c);
-		$c = str_replace("yourusernamehere", $user, $c);
-		$c = str_replace("yourpasswordhere", $pass, $c);
-		$c = preg_replace("/define\(\s*\x27DB_HOST\x27,\s*\x27[^\x27]*\x27\s*\);/", "define( \x27DB_HOST\x27, " . var_export($host, true) . " );", $c);
+		$abs = var_export(rtrim($abspath, "/") . "/", true);
+		$c = str_replace(array("dirname( __FILE__ ) . \x27/src/\x27", "__DIR__ . \x27/src/\x27"), $abs, $c);
+		$set = static function (string $const, string $value) use (&$c): void {
+			$c = preg_replace("/define\(\s*\x27" . $const . "\x27,\s*\x27[^\x27]*\x27\s*\);/", "define( \x27" . $const . "\x27, " . var_export($value, true) . " );", $c, 1, $count);
+			if (1 !== $count) { fwrite(STDERR, "Could not set $const\n"); exit(1); }
+		};
+		$set("DB_NAME", $name);
+		$set("DB_USER", $user);
+		$set("DB_PASSWORD", $pass);
+		$set("DB_HOST", $host);
 		file_put_contents($file, $c);
 	' "$config" "$core_dir" "$DB_NAME" "$DB_USER" "$DB_PASS" "$DB_HOST"
 	grep -q "$core_dir" "$config" || { echo "Failed to set ABSPATH in $config" >&2; exit 1; }
@@ -115,14 +137,14 @@ install_db() {
 		if [ ! -f "$dropin" ]; then
 			local plugin="$WP_CORE_DIR/wp-content/plugins/sqlite-database-integration"
 			rm -rf "$plugin"
-			git clone -q --depth 1 https://github.com/WordPress/sqlite-database-integration "$plugin"
+			git -c advice.detachedHead=false clone -q --depth 1 --branch "$SQLITE_PLUGIN_TAG" https://github.com/WordPress/sqlite-database-integration "$plugin"
 			# The plugin lives at the repo root in older releases and under packages/ in newer ones.
 			local impl
 			impl=$(dirname "$(find "$plugin" -name db.copy -not -path '*/tests/*' | head -1)")
 			sed -e "s#{SQLITE_IMPLEMENTATION_FOLDER_PATH}#$impl#" -e "s#{SQLITE_PLUGIN}#${impl#"$WP_CORE_DIR/wp-content/plugins/"}/load.php#" \
 				"$impl/db.copy" > "$dropin"
 		fi
-		echo "Using SQLite drop-in (local runs only; CI uses MySQL/MariaDB)."
+		echo "Using SQLite drop-in $SQLITE_PLUGIN_TAG (local runs and the weekly SQLite smoke job)."
 		return
 	fi
 	if [ "$SKIP_DB_CREATE" = "true" ]; then
@@ -141,8 +163,9 @@ install_db() {
 	elif [ -n "$host" ]; then
 		extra=(--host="$host" --protocol=tcp)
 	fi
-	mysqladmin create "$DB_NAME" --user="$DB_USER" --password="$DB_PASS" "${extra[@]}" 2>/dev/null \
-		|| mysql --user="$DB_USER" --password="$DB_PASS" "${extra[@]}" -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`"
+	# DB_NAME is validated above (letters, digits, underscores only).
+	MYSQL_PWD="$DB_PASS" mysqladmin create "$DB_NAME" --user="$DB_USER" "${extra[@]}" 2>/dev/null \
+		|| MYSQL_PWD="$DB_PASS" mysql --user="$DB_USER" "${extra[@]}" -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`"
 }
 
 install_wp

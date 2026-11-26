@@ -7,3 +7,15 @@
 *.woff binary
 *.woff2 binary
 *.phar binary
+
+# Keep development files out of `git archive` / GitHub source zips (mirrors .distignore).
+/.github export-ignore
+/bin export-ignore
+/tests export-ignore
+/tools export-ignore
+/.distignore export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/phpcs.xml.dist export-ignore
+/phpunit.xml.dist export-ignore
+/phpunit-integration.xml.dist export-ignore

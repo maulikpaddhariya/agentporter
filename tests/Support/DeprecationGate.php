@@ -98,6 +98,60 @@ final class DeprecationGate {
 	}
 
 	/**
+	 * WordPress notices raised on the plugin's behalf (_doing_it_wrong, _deprecated_*) come from
+	 * wp-includes, so the PHP error handler cannot attribute them. Hook WordPress' own "*_run"
+	 * actions and attribute them by backtrace instead. Called by the integration bootstrap.
+	 */
+	public static function watch_wordpress_notices(): void {
+		$hooks = array(
+			'doing_it_wrong_run',
+			'deprecated_function_run',
+			'deprecated_argument_run',
+			'deprecated_hook_run',
+			'deprecated_file_included',
+			'deprecated_constructor_run',
+			'deprecated_class_run',
+		);
+		foreach ( $hooks as $hook ) {
+			add_action(
+				$hook,
+				static function ( ...$args ) use ( $hook ): void {
+					self::record_wordpress_notice( $hook, (string) ( $args[0] ?? '' ) );
+				},
+				10,
+				5
+			);
+		}
+	}
+
+	/**
+	 * Records a WordPress notice when plugin code is on the call stack.
+	 *
+	 * @param string $hook WordPress hook that fired.
+	 * @param string $what Function, hook or file named by WordPress.
+	 */
+	public static function record_wordpress_notice( string $hook, string $what ): void {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_debug_backtrace -- Test-only attribution.
+		foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS ) as $frame ) {
+			$file = isset( $frame['file'] ) ? (string) $frame['file'] : '';
+			if ( self::is_owned( $file ) ) {
+				self::$issues[] = sprintf( '[%s] %s called from %s:%d', $hook, $what, $file, (int) ( $frame['line'] ?? 0 ) );
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Whether the gate is still the active PHP error handler.
+	 */
+	public static function is_active(): bool {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- Peek at the current handler.
+		$current = set_error_handler( static fn(): bool => false );
+		restore_error_handler();
+		return array( self::class, 'handle' ) === $current;
+	}
+
+	/**
 	 * Returns recorded issues (for the gate's own tests).
 	 *
 	 * @return list<string>
@@ -136,6 +190,9 @@ final class DeprecationGate {
 	 * Prints recorded issues and forces a failing exit code.
 	 */
 	public static function report(): void {
+		if ( self::$installed && ! self::is_active() ) {
+			self::$issues[] = '[gate] another error handler replaced the deprecation gate; issues may have been missed';
+		}
 		if ( array() === self::$issues ) {
 			return;
 		}

@@ -76,4 +76,13 @@ final class DeprecationGateTest extends TestCase {
 		$this->assertFalse( $handled );
 		$this->assertSame( array(), DeprecationGate::issues() );
 	}
+
+	public function test_gate_is_the_active_error_handler(): void {
+		$this->assertTrue( DeprecationGate::is_active() );
+	}
+
+	public function test_wordpress_notice_without_plugin_code_on_stack_is_ignored(): void {
+		DeprecationGate::record_wordpress_notice( 'doing_it_wrong_run', 'register_rest_route' );
+		$this->assertSame( array(), DeprecationGate::issues() );
+	}
 }

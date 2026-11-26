@@ -75,7 +75,7 @@
 
 	<!--
 	Justification: VIP file-system rules target code running on a VIP web node. Tests and bin/ scripts
-	run only in CI or on a developer machine and write to STDERR or temp files. Never shipped (.distignore).
+	run only in CI or on a developer machine and write to STDERR or temp files. Excluded from releases by .distignore and .gitattributes export-ignore.
 	-->
 	<rule ref="WordPressVIPMinimum.Functions.RestrictedFunctions">
 		<exclude-pattern>/tests/*</exclude-pattern>

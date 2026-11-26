@@ -3,7 +3,8 @@
  * Integration test bootstrap: loads the WordPress test suite, optionally WooCommerce, then AgentPorter.
  *
  * Environment:
- * - WP_TESTS_DIR      Path to the WordPress PHPUnit includes (default /tmp/wordpress-tests-lib).
+ * - WP_TESTS_DIR      Path to the WordPress PHPUnit includes
+ *                     (default ${XDG_CACHE_HOME:-$HOME/.cache}/agentporter/wordpress-tests-lib, as bin/install-wp-tests.sh).
  * - AGENTPORTER_WITH_WOO=1  Load WooCommerce before AgentPorter.
  * - WP_MULTISITE=1    Run as multisite (read by the WordPress test bootstrap).
  *
@@ -19,7 +20,9 @@ require_once $agentporter_root . '/tests/Support/DeprecationGate.php';
 
 $agentporter_tests_dir = getenv( 'WP_TESTS_DIR' );
 if ( false === $agentporter_tests_dir || '' === $agentporter_tests_dir ) {
-	$agentporter_tests_dir = rtrim( sys_get_temp_dir(), '/\\' ) . '/wordpress-tests-lib';
+	$agentporter_cache     = getenv( 'XDG_CACHE_HOME' );
+	$agentporter_cache     = ( false === $agentporter_cache || '' === $agentporter_cache ) ? getenv( 'HOME' ) . '/.cache' : $agentporter_cache;
+	$agentporter_tests_dir = $agentporter_cache . '/agentporter/wordpress-tests-lib';
 }
 
 if ( ! file_exists( $agentporter_tests_dir . '/includes/functions.php' ) ) {
@@ -55,6 +58,7 @@ tests_add_filter(
 	'muplugins_loaded',
 	static function () use ( $agentporter_root ): void {
 		\AgentPorter\Tests\Support\DeprecationGate::install( $agentporter_root );
+		\AgentPorter\Tests\Support\DeprecationGate::watch_wordpress_notices();
 	},
 	0
 );

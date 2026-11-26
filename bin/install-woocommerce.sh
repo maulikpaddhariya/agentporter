@@ -40,10 +40,30 @@ case "$VERSION" in
 esac
 
 tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 echo "Downloading $zip_name"
 curl -fsSL "https://downloads.wordpress.org/plugin/${zip_name}" -o "$tmp/woocommerce.zip"
 rm -rf "$DEST/woocommerce"
 mkdir -p "$DEST"
 unzip -q "$tmp/woocommerce.zip" -d "$DEST"
-rm -rf "$tmp"
-grep -m1 "Version:" "$DEST/woocommerce/woocommerce.php"
+
+installed=$(sed -n 's/^[ *]*Version:[[:space:]]*//p' "$DEST/woocommerce/woocommerce.php" | head -1 | tr -d '[:space:]')
+echo "Installed WooCommerce $installed; verifying against WordPress.org checksums"
+curl -fsSL "https://downloads.wordpress.org/plugin-checksums/woocommerce/${installed}.json" -o "$tmp/checksums.json"
+php -r '
+	[$dir, $sums] = array_slice( $argv, 1 );
+	$data  = json_decode( (string) file_get_contents( $sums ), true );
+	$files = $data["files"] ?? array();
+	if ( count( $files ) < 100 ) { fwrite( STDERR, "Checksum list missing or too short\n" ); exit( 1 ); }
+	$bad = 0;
+	foreach ( $files as $path => $hashes ) {
+		$file = $dir . "/" . $path;
+		$want = (array) ( $hashes["sha256"] ?? array() );
+		if ( ! is_file( $file ) || ! in_array( hash_file( "sha256", $file ), $want, true ) ) {
+			fwrite( STDERR, "Checksum mismatch: $path\n" );
+			++$bad;
+		}
+	}
+	if ( $bad > 0 ) { exit( 1 ); }
+	echo "Verified " . count( $files ) . " files.\n";
+' "$DEST/woocommerce" "$tmp/checksums.json"

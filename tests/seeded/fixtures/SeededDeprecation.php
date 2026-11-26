@@ -14,4 +14,13 @@ final class SeededDeprecation {
 	public static function length( $value ): int {
 		return strlen( $value );
 	}
+
+	/** Plugin code that catches the gate's exception must still fail the run (shutdown check). */
+	public static function swallowed(): int {
+		try {
+			return strlen( null );
+		} catch ( \Throwable $e ) {
+			return -1;
+		}
+	}
 }

@@ -84,11 +84,15 @@ jobs:
         run: composer install --no-interaction --no-progress
 
       - name: Install WordPress ${{ inputs.wp }} and the test library
-        run: bin/install-wp-tests.sh wordpress_test root root 127.0.0.1:3306 "${{ inputs.wp }}" true
+        env:
+          WP_VERSION: ${{ inputs.wp }}
+        run: bin/install-wp-tests.sh wordpress_test root root 127.0.0.1:3306 "$WP_VERSION" true
 
       - name: Install WooCommerce ${{ inputs.woo }}
         if: inputs.woo != ''
-        run: bin/install-woocommerce.sh "${{ inputs.woo }}"
+        env:
+          WOO_VERSION: ${{ inputs.woo }}
+        run: bin/install-woocommerce.sh "$WOO_VERSION"
 
       - name: Unit tests
         run: composer test:unit
