@@ -94,7 +94,9 @@ final class Plugin {
 	 * @return list<class-string<Subsystem>>
 	 */
 	public static function default_subsystems(): array {
-		return array();
+		return array(
+			Core\MigrationSubsystem::class,
+		);
 	}
 
 	/**

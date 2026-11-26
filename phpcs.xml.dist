@@ -73,6 +73,11 @@
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 
+	<!-- Justification: integration tests inspect the database directly to verify schema and lock rows. -->
+	<rule ref="WordPress.DB.DirectDatabaseQuery">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
 	<!-- Justification: test doubles for one scenario are kept together in a single fixtures file. -->
 	<rule ref="Generic.Files.OneObjectStructurePerFile">
 		<exclude-pattern>/tests/*/Fixtures/*</exclude-pattern>
