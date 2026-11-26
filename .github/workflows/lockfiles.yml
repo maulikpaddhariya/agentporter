@@ -42,7 +42,7 @@ jobs:
           for manifest in composer.json tools/*/composer.json; do
             [ -f "$manifest" ] || continue
             dir=$(dirname "$manifest")
-            if ! (cd "$dir" && composer validate --no-check-publish --no-check-all --strict >/dev/null 2>&1); then
+            if [ ! -f "$dir/composer.lock" ] || ! (cd "$dir" && composer validate --no-check-publish --no-check-all --strict >/dev/null 2>&1); then
               echo "Updating lock in $dir"
               (cd "$dir" && composer update --no-interaction --no-progress --no-install --no-scripts)
               changed=1
