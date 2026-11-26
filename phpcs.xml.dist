@@ -73,6 +73,11 @@
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 
+	<!-- Justification: test doubles for one scenario are kept together in a single fixtures file. -->
+	<rule ref="Generic.Files.OneObjectStructurePerFile">
+		<exclude-pattern>/tests/*/Fixtures/*</exclude-pattern>
+	</rule>
+
 	<!--
 	Justification: VIP file-system rules target code running on a VIP web node. Tests and bin/ scripts
 	run only in CI or on a developer machine and write to STDERR or temp files. Excluded from releases by .distignore and .gitattributes export-ignore.

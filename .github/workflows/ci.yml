@@ -33,6 +33,23 @@ jobs:
           tools: none
       - run: bin/lint-syntax.sh
 
+  legacy-parse:
+    name: Requirements notice parses on PHP 7.2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '7.2'
+          coverage: none
+          tools: none
+      # These two files run before the version check, so an outdated host must be able to parse them
+      # to show the "requirements not met" notice instead of a fatal error.
+      - run: php -l agentporter.php && php -l src/Core/Requirements.php
+
   phpcs:
     name: PHPCS (WPCS + VIP + PHPCompatibilityWP)
     runs-on: ubuntu-24.04
@@ -115,7 +132,7 @@ jobs:
   ci-result:
     name: CI result
     if: always()
-    needs: [syntax-ceiling, phpcs, seeded-violations, tests]
+    needs: [syntax-ceiling, legacy-parse, phpcs, seeded-violations, tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
