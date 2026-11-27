@@ -168,4 +168,28 @@ final class SecurityCoreTest extends \WP_UnitTestCase {
 		$this->assertWPError( $result );
 		$this->assertSame( 'agentporter_unavailable', $result->get_error_code() );
 	}
+
+	public function test_super_admin_without_explicit_grant_is_denied_read_and_write(): void {
+		$admin = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		if ( is_multisite() ) {
+			grant_super_admin( $admin );
+			$this->assertTrue( user_can( $admin, AgentGuard::CAP_WRITE ), 'Core lets super admins pass every capability...' );
+		}
+		$this->assertWPError( AgentGuard::authorize( self::ABILITY, new AgentContext( 'app_password', $admin, '' ) ), '...but agents need an explicit grant.' );
+		$this->assertWPError( AgentGuard::authorize( self::ABILITY, new AgentContext( 'app_password', $admin, '' ), true ) );
+	}
+
+	public function test_explicitly_granted_write_capability_is_honoured(): void {
+		$agent = $this->agent( array( AgentGuard::CAP_READ, AgentGuard::CAP_WRITE ) );
+		$this->assertTrue( AgentGuard::authorize( self::ABILITY, new AgentContext( 'app_password', $agent, '' ), true ) );
+	}
+
+	public function test_flood_of_anonymous_denials_writes_a_bounded_number_of_audit_rows(): void {
+		global $wpdb;
+		for ( $i = 0; $i < 80; $i++ ) {
+			AgentGuard::authorize( self::ABILITY, new AgentContext( 'user', 0, '192.0.2.10' ) );
+		}
+		$rows = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $wpdb->prefix . Schema::AUDIT ) );
+		$this->assertSame( AgentGuard::AUDIT_DENIALS, $rows );
+	}
 }

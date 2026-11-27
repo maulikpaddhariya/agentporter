@@ -16,12 +16,15 @@ defined( 'ABSPATH' ) || exit;
  * (XSalsa20-Poly1305) in non-autoloaded options. WordPress ships sodium_compat, so this works on
  * every host.
  *
- * Key: AGENTPORTER_SECRET_KEY from wp-config.php if defined (any string of 32+ bytes), otherwise
- * derived with BLAKE2b from AUTH_KEY + SECURE_AUTH_SALT and a fixed context. If neither gives a real
- * key (missing or WordPress' placeholder phrase), the store refuses to work instead of using a weak key.
+ * Key: AGENTPORTER_SECRET_KEY from wp-config.php if defined (32+ bytes with real variety), otherwise
+ * derived with BLAKE2b from AUTH_KEY + SECURE_AUTH_SALT and a fixed context. Like WordPress core, it
+ * refuses salts that are missing, short, the (English or translated) sample phrase, low-entropy, or
+ * repeated across salt constants: the store then refuses to work instead of using a guessable key.
  *
- * Reads never throw for missing, tampered or undecryptable values: they return null, and callers that
- * own a generated secret (HMAC keys) simply create a new one. Secret values are never logged.
+ * Reads never throw for missing, tampered or undecryptable values: they return null. get_or_create()
+ * only creates a secret that does not exist yet; it never overwrites one it cannot decrypt (salt
+ * rotation, another site's copy), because that would silently invalidate everything signed with it.
+ * Secret values and the key never appear in logs, exceptions or debug dumps.
  */
 final class SecretStore {
 
@@ -41,7 +44,7 @@ final class SecretStore {
 	 *
 	 * @param string|null $key_material Key material (tests); null reads wp-config constants.
 	 */
-	public function __construct( ?string $key_material = null ) {
+	public function __construct( #[\SensitiveParameter] ?string $key_material = null ) {
 		$this->key = self::derive_key( $key_material ?? self::key_material_from_config() );
 	}
 
@@ -59,12 +62,15 @@ final class SecretStore {
 	 * @param string $plaintext Secret value.
 	 * @throws \RuntimeException When no safe key is available.
 	 */
-	public function put( string $name, string $plaintext ): void {
+	public function put( string $name, #[\SensitiveParameter] string $plaintext ): void {
 		$option = $this->option( $name ); // Validates the name first.
 		$key    = $this->require_key();
 		$nonce  = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 		$box    = sodium_crypto_secretbox( $plaintext, $nonce, $this->bind( $key, $name ) );
-		update_option( $option, self::VERSION . base64_encode( $nonce . $box ), false ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Binary ciphertext encoding, not obfuscation.
+		$value  = self::VERSION . base64_encode( $nonce . $box ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Binary ciphertext encoding, not obfuscation.
+		if ( ! update_option( $option, $value, false ) ) {
+			throw new \RuntimeException( 'The secret could not be saved.' );
+		}
 	}
 
 	/**
@@ -106,9 +112,32 @@ final class SecretStore {
 		if ( null !== $existing && strlen( $existing ) === $bytes ) {
 			return $existing;
 		}
+		$option = $this->option( $name );
+		$key    = $this->require_key();
+		if ( null !== get_option( $option, null ) ) {
+			// A stored value we cannot read (rotated salts, copied database): never overwrite it silently.
+			throw new \RuntimeException( 'A stored secret cannot be decrypted with the current key.' );
+		}
 		$secret = Crypto::random_bytes( $bytes );
-		$this->put( $name, $secret );
-		return $secret;
+		$nonce  = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
+		$value  = self::VERSION . base64_encode( $nonce . sodium_crypto_secretbox( $secret, $nonce, $this->bind( $key, $name ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Binary ciphertext encoding.
+		// add_option() inserts only when absent: if another request created it first, use theirs.
+		add_option( $option, $value, '', false );
+		wp_cache_delete( $option, 'options' );
+		$stored = $this->get( $name );
+		if ( null === $stored || strlen( $stored ) !== $bytes ) {
+			throw new \RuntimeException( 'The secret could not be created.' );
+		}
+		return $stored;
+	}
+
+	/**
+	 * Never expose the key in var_dump(), print_r() or debugging tools.
+	 *
+	 * @return array<string, string>
+	 */
+	public function __debugInfo(): array {
+		return array( 'key' => null === $this->key ? 'unavailable' : '[hidden]' );
 	}
 
 	/**
@@ -127,7 +156,7 @@ final class SecretStore {
 	 * @throws \InvalidArgumentException For an invalid name.
 	 */
 	private function option( string $name ): string {
-		if ( 1 !== preg_match( '/^[a-z0-9_]{1,40}$/', $name ) ) {
+		if ( 1 !== preg_match( '/^[a-z0-9_]{1,40}\z/', $name ) ) {
 			throw new \InvalidArgumentException( 'Invalid secret name.' );
 		}
 		return self::PREFIX . $name;
@@ -160,16 +189,47 @@ final class SecretStore {
 	 */
 	private static function key_material_from_config(): string {
 		if ( defined( 'AGENTPORTER_SECRET_KEY' ) && is_string( constant( 'AGENTPORTER_SECRET_KEY' ) ) ) {
-			return 'own:' . (string) constant( 'AGENTPORTER_SECRET_KEY' );
+			$own = (string) constant( 'AGENTPORTER_SECRET_KEY' );
+			return self::is_strong( $own ) ? 'own:' . $own : '';
 		}
-		$auth = defined( 'AUTH_KEY' ) ? (string) constant( 'AUTH_KEY' ) : '';
-		$salt = defined( 'SECURE_AUTH_SALT' ) ? (string) constant( 'SECURE_AUTH_SALT' ) : '';
-		foreach ( array( $auth, $salt ) as $part ) {
-			if ( strlen( $part ) < 32 || str_contains( $part, 'put your unique phrase here' ) ) {
+		$names  = array( 'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT' );
+		$values = array();
+		foreach ( $names as $name ) {
+			if ( defined( $name ) ) {
+				$values[ $name ] = (string) constant( $name );
+			}
+		}
+		$counts = array_count_values( $values );
+		foreach ( array( 'AUTH_KEY', 'SECURE_AUTH_SALT' ) as $name ) {
+			$value = $values[ $name ] ?? '';
+			// WordPress core treats a salt reused across constants as insecure (pluggable.php, wp_salt()).
+			if ( ! self::is_strong( $value ) || ( $counts[ $value ] ?? 0 ) > 1 ) {
 				return '';
 			}
 		}
-		return 'wp:' . $auth . "\0" . $salt;
+		return 'wp:' . $values['AUTH_KEY'] . "\0" . $values['SECURE_AUTH_SALT'];
+	}
+
+	/**
+	 * Whether a key or salt is usable: 32+ bytes, not the sample phrase (English or translated), and
+	 * not low-entropy (fewer than 10 distinct bytes).
+	 *
+	 * @param string $value Candidate.
+	 */
+	public static function is_strong( #[\SensitiveParameter] string $value ): bool {
+		if ( strlen( $value ) < 32 || count( count_chars( $value, 1 ) ) < 10 ) {
+			return false;
+		}
+		$placeholders = array( 'put your unique phrase here' );
+		if ( function_exists( '__' ) ) {
+			$placeholders[] = __( 'put your unique phrase here' ); // phpcs:ignore WordPress.WP.I18n.MissingArgDomain -- Core's own string, as wp_salt() checks it.
+		}
+		foreach ( $placeholders as $placeholder ) {
+			if ( '' !== $placeholder && str_contains( $value, $placeholder ) ) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**

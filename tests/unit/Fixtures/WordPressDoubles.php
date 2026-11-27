@@ -59,3 +59,14 @@ if ( ! class_exists( 'wpdb' ) ) {
 		}
 	}
 }
+
+if ( ! class_exists( 'WP_User' ) ) {
+	class WP_User {
+		public $ID      = 0;
+		public $allcaps = array();
+		public function __construct( $id = 0, $allcaps = array() ) {
+			$this->ID      = $id;
+			$this->allcaps = $allcaps;
+		}
+	}
+}

@@ -23,6 +23,28 @@ Fires when AgentPorter switches off one of its subsystems for the rest of the re
 | `$subsystem` | `string` | Subsystem id (for example `migrations`), `class:<ClassName>` when the subsystem failed before reporting its id, or `dependency:<id>` for subsystems switched off because something they depend on failed. |
 | `$exception_class` | `string` | Class name of the exception. The message is never passed (it can contain private data). |
 
+### `agentporter_guard_check`
+
+Runs last in `AgentGuard`, only after every built-in check (kill switch, enabled ability, explicit capability grant, scope, rate limits) has passed. Use it to add your own denial rules, for example office hours.
+
+| Argument | Type | Description |
+|---|---|---|
+| `$denials` | `AgentPorter\Security\GuardDenials` | Collector. Call `$denials->deny( 'code' )` to deny. Nothing can remove a denial, so a later listener can never cancel an earlier one. |
+| `$ability` | `string` | Ability name, for example `agentporter/site-info`. |
+| `$context` | `AgentPorter\Security\AgentContext` | Caller: actor type, user id, IP, scopes. |
+| `$write` | `bool` | Whether the ability writes. |
+
+The caller only ever sees a generic "This action is not available." with code `agentporter_policy_<your_code>`; your code is sanitised (lowercase letters, digits, underscores) and recorded in the audit log. Never put personal data in it. A listener that throws denies the call.
+
+```php
+add_action( 'agentporter_guard_check', function ( $denials ) {
+	$hour = (int) wp_date( 'G' );
+	if ( $hour < 8 || $hour >= 20 ) {
+		$denials->deny( 'outside_hours' );
+	}
+} );
+```
+
 ## Filters
 
 ### `agentporter_redact_fields`
@@ -40,29 +62,6 @@ add_filter( 'agentporter_redact_fields', function ( $fields ) {
 	$fields[] = 'order_note';
 	return $fields;
 } );
-```
-
-### `agentporter_guard_decision`
-
-Runs last in `AgentGuard`, only after every built-in check (kill switch, enabled ability, capability, scope, rate limits) has passed. Use it to add your own denial rules, for example office hours.
-
-| Argument | Type | Description |
-|---|---|---|
-| `$allowed` | `true` | Always `true` when this runs. |
-| `$ability` | `string` | Ability name, for example `agentporter/site-info`. |
-| `$context` | `AgentPorter\Security\AgentContext` | Caller: actor type, user id, IP, scopes. |
-| `$write` | `bool` | Whether the ability writes. |
-
-Return `true` to allow, or a `WP_Error` to deny (status 403 is added if missing). **Any other return value denies.** This filter cannot turn an earlier denial into an allow.
-
-```php
-add_filter( 'agentporter_guard_decision', function ( $allowed, $ability ) {
-	$hour = (int) wp_date( 'G' );
-	if ( $hour < 8 || $hour >= 20 ) {
-		return new WP_Error( 'outside_hours', 'Agents are allowed between 08:00 and 20:00.', array( 'status' => 403 ) );
-	}
-	return $allowed;
-}, 10, 2 );
 ```
 
 ## Constants

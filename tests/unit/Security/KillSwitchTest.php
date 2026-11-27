@@ -48,12 +48,23 @@ final class KillSwitchTest extends TestCase {
 		$this->assertFalse( ( new KillSwitch() )->is_on() );
 	}
 
-	public function test_set_writes_autoloaded_flag(): void {
-		Functions\expect( 'update_option' )->once()->with( KillSwitch::OPTION, '1', true );
-		Functions\expect( 'update_option' )->once()->with( KillSwitch::OPTION, '0', true );
+	public function test_set_writes_a_non_autoloaded_flag(): void {
+		Functions\expect( 'update_option' )->once()->with( KillSwitch::OPTION, '1', false );
+		Functions\expect( 'update_option' )->once()->with( KillSwitch::OPTION, '0', false );
 		$switch = new KillSwitch( false );
 		$switch->set( true );
 		$switch->set( false );
 		$this->addToAssertionCount( 2 );
+	}
+
+	public function test_empty_string_counts_as_on(): void {
+		Functions\when( 'get_option' )->justReturn( '' );
+		$this->assertTrue( ( new KillSwitch( false ) )->is_on() );
+	}
+
+	public function test_refresh_rereads_past_the_cache(): void {
+		Functions\expect( 'wp_cache_delete' )->once()->with( KillSwitch::OPTION, 'options' );
+		Functions\when( 'get_option' )->justReturn( '1' );
+		$this->assertTrue( ( new KillSwitch( false ) )->refresh() );
 	}
 }

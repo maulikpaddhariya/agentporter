@@ -24,7 +24,7 @@ final class Crypto {
 	 * @param string $data Data.
 	 * @throws \InvalidArgumentException When the key is too short.
 	 */
-	public static function hmac( string $key, string $data ): string {
+	public static function hmac( #[\SensitiveParameter] string $key, string $data ): string {
 		if ( strlen( $key ) < 32 ) {
 			throw new \InvalidArgumentException( 'HMAC key too short.' );
 		}
@@ -37,7 +37,7 @@ final class Crypto {
 	 * @param string $known Known value.
 	 * @param string $user  User-supplied value.
 	 */
-	public static function equals( string $known, string $user ): bool {
+	public static function equals( #[\SensitiveParameter] string $known, #[\SensitiveParameter] string $user ): bool {
 		return hash_equals( $known, $user );
 	}
 

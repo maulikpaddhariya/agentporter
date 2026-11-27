@@ -56,8 +56,8 @@ final class RateLimiter {
 	 * @param string $bucket Bucket name.
 	 */
 	public static function key( string $bucket ): string {
-		if ( 1 === preg_match( '/^[a-z0-9:_.-]{1,64}$/', $bucket ) ) {
-			return $bucket;
+		if ( 1 === preg_match( '/^[a-z0-9:_.-]{1,64}\z/', $bucket ) ) {
+			return 'r:' . $bucket;
 		}
 		return 'h:' . substr( hash( 'sha256', $bucket ), 0, 40 );
 	}

@@ -34,6 +34,16 @@ final class SecretStoreTest extends TestCase {
 			}
 		);
 		Functions\when( 'get_option' )->alias( fn( $name, $default = false ) => $this->options[ $name ][0] ?? $default );
+		Functions\when( 'add_option' )->alias(
+			function ( $name, $value, $deprecated = '', $autoload = null ) {
+				if ( array_key_exists( $name, $this->options ) ) {
+					return false;
+				}
+				$this->options[ $name ] = array( $value, $autoload );
+				return true;
+			}
+		);
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
 		Functions\when( 'delete_option' )->alias(
 			function ( $name ) {
 				unset( $this->options[ $name ] );
@@ -119,5 +129,47 @@ final class SecretStoreTest extends TestCase {
 	public function test_wordpress_placeholder_salts_are_rejected(): void {
 		// Without constants in the unit environment, the config path yields no key.
 		$this->assertFalse( ( new SecretStore() )->is_available() );
+	}
+
+	public function test_get_or_create_never_overwrites_an_undecryptable_secret(): void {
+		$this->store()->get_or_create( 'cart_hmac' );
+		$before = $this->options['agentporter_secret_cart_hmac'][0];
+		try {
+			$this->store( 'own:another-key-after-rotation-0123456789abcdefXYZ' )->get_or_create( 'cart_hmac' );
+			$this->fail( 'Expected refusal.' );
+		} catch ( \RuntimeException $e ) {
+			$this->assertSame( $before, $this->options['agentporter_secret_cart_hmac'][0] );
+		}
+	}
+
+	public function test_concurrent_first_use_converges_on_one_secret(): void {
+		$store = $this->store();
+		// Another request created the secret between our read and our insert: add_option() keeps theirs.
+		$theirs = $this->store()->get_or_create( 'race' );
+		$this->assertSame( $theirs, $store->get_or_create( 'race' ) );
+	}
+
+	public function test_put_throws_when_the_option_cannot_be_written(): void {
+		Functions\when( 'update_option' )->justReturn( false );
+		$this->expectException( \RuntimeException::class );
+		$this->store()->put( 'x', 'v' );
+	}
+
+	public function test_weak_values_are_not_strong_keys(): void {
+		$this->assertFalse( SecretStore::is_strong( str_repeat( '0', 64 ) ), 'Low entropy.' );
+		$this->assertFalse( SecretStore::is_strong( 'short' ) );
+		$this->assertFalse( SecretStore::is_strong( 'xx put your unique phrase here xx 0123456789' ) );
+		$this->assertTrue( SecretStore::is_strong( 'F7#kq9!Lm2@Zp4$Wx8^Rt6&Yb1*Nc3(Vd5)' ) );
+	}
+
+	public function test_translated_placeholder_is_rejected(): void {
+		Functions\when( '__' )->alias( static fn( $text ) => 'mettez votre phrase unique ici' === $text ? $text : ( 'put your unique phrase here' === $text ? 'mettez votre phrase unique ici' : $text ) );
+		$this->assertFalse( SecretStore::is_strong( 'mettez votre phrase unique ici 0123456789ABCDEF' ) );
+	}
+
+	public function test_debug_output_never_contains_the_key(): void {
+		$dump = print_r( $this->store(), true );
+		$this->assertStringContainsString( '[hidden]', $dump );
+		$this->assertStringNotContainsString( 'test-key', $dump );
 	}
 }

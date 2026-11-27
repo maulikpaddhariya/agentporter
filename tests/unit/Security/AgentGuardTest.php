@@ -18,7 +18,8 @@ use AgentPorter\Security\RateLimiter;
 use AgentPorter\Security\Redactor;
 use AgentPorter\Tests\Unit\Fixtures\MemoryRateStore;
 use AgentPorter\Tests\Unit\TestCase;
-use Brain\Monkey\Filters;
+use AgentPorter\Security\GuardDenials;
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 
 require_once dirname( __DIR__ ) . '/Fixtures/WordPressDoubles.php';
@@ -75,7 +76,11 @@ final class AgentGuardTest extends TestCase {
 		$this->faults  = new Faults( new Logger( false ) );
 		$this->rates   = new MemoryRateStore();
 		Functions\when( 'get_option' )->alias( fn( $name, $default = false ) => array_key_exists( $name, $this->options ) ? $this->options[ $name ] : $default );
-		Functions\when( 'user_can' )->alias( fn( $user, $cap ) => in_array( $cap, $this->caps[ (int) $user ] ?? array(), true ) );
+		Functions\when( 'get_userdata' )->alias(
+			fn( $user ) => isset( $this->caps[ (int) $user ] )
+				? new \WP_User( (int) $user, array_fill_keys( $this->caps[ (int) $user ], true ) )
+				: false
+		);
 		Functions\when( 'wp_salt' )->justReturn( str_repeat( 's', 64 ) );
 		Functions\when( 'wp_json_encode' )->alias( static fn( $data, $flags = 0 ) => json_encode( $data, $flags ) );
 	}
@@ -168,6 +173,62 @@ final class AgentGuardTest extends TestCase {
 		$this->assertGreaterThan( 0, $denied->get_error_data()['retry_after'] );
 	}
 
+	public function test_users_without_the_capability_get_one_uniform_code(): void {
+		$this->options[ KillSwitch::OPTION ] = '1';
+		$denied                              = $this->guard()->check( self::ABILITY, $this->context( 0 ) );
+		$this->assertDenied( $denied, 'agentporter_forbidden' );
+		$this->assertSame( 'agentporter_agents_disabled', $this->wpdb->inserted[0][1]['error_code'], 'The audit keeps the real reason.' );
+		$this->options[ KillSwitch::OPTION ] = '0';
+		$this->assertDenied( $this->guard()->check( 'agentporter/not-enabled', $this->context( 0 ) ), 'agentporter_forbidden' );
+	}
+
+	public function test_super_admin_style_users_without_an_explicit_grant_are_denied(): void {
+		// A super admin passes user_can() for everything; the guard must look only at explicit grants.
+		Functions\when( 'user_can' )->justReturn( true );
+		$this->caps[50] = array( 'manage_network', 'manage_options' );
+		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context( 50 ) ), 'agentporter_forbidden' );
+	}
+
+	public function test_ability_name_with_trailing_newline_is_rejected(): void {
+		$this->options[ AgentGuard::ENABLED_OPTION ] = array( "agentporter/site-info\n" );
+		$this->assertDenied( $this->guard()->check( "agentporter/site-info\n", $this->context() ), 'agentporter_ability_disabled' );
+	}
+
+	public function test_ipv6_addresses_in_the_same_64_share_a_bucket(): void {
+		$this->assertSame( AgentGuard::network_of( '2001:db8:1:2::1' ), AgentGuard::network_of( '2001:db8:1:2:ffff:ffff:ffff:ffff' ) );
+		$this->assertNotSame( AgentGuard::network_of( '2001:db8:1:2::1' ), AgentGuard::network_of( '2001:db8:1:3::1' ) );
+		$this->assertSame( '203.0.113.9', AgentGuard::network_of( '::ffff:203.0.113.9' ) );
+		$this->assertSame( 'unknown', AgentGuard::network_of( '' ) );
+		$this->assertSame( 'unknown', AgentGuard::network_of( 'garbage' ) );
+	}
+
+	public function test_rotating_ipv6_within_a_64_hits_the_ip_limit(): void {
+		$guard = $this->guard();
+		for ( $i = 1; $i <= AgentGuard::IP_PER_MIN; $i++ ) {
+			$this->caps[ 2000 + $i ] = array( AgentGuard::CAP_READ );
+			$this->assertTrue( $guard->check( self::ABILITY, $this->context( 2000 + $i, null, '2001:db8:aa:bb::' . dechex( $i ) ) ) );
+		}
+		$this->caps[9000] = array( AgentGuard::CAP_READ );
+		$this->assertDenied( $guard->check( self::ABILITY, $this->context( 9000, null, '2001:db8:aa:bb::ffff' ) ), 'agentporter_rate_limited', 429 );
+	}
+
+	public function test_user_bucket_does_not_depend_on_actor_type(): void {
+		$guard = $this->guard();
+		$types = array( 'app_password', 'user', 'cli', 'webmcp' );
+		for ( $i = 0; $i < AgentGuard::ACTOR_PER_MIN; $i++ ) {
+			$this->assertTrue( $guard->check( self::ABILITY, new AgentContext( $types[ $i % 4 ], 7, '198.51.100.' . ( $i % 200 ) ) ) );
+		}
+		$this->assertDenied( $guard->check( self::ABILITY, new AgentContext( 'agent_key', 7, '198.51.100.250' ) ), 'agentporter_rate_limited', 429 );
+	}
+
+	public function test_denied_calls_write_a_bounded_number_of_audit_rows(): void {
+		$guard = $this->guard();
+		for ( $i = 0; $i < 200; $i++ ) {
+			$guard->check( self::ABILITY, $this->context( 0 ) );
+		}
+		$this->assertSame( AgentGuard::AUDIT_DENIALS, count( $this->wpdb->inserted ) );
+	}
+
 	public function test_ip_rate_limit_applies_across_users_and_never_stores_the_raw_ip(): void {
 		$guard = $this->guard();
 		for ( $user = 1; $user <= AgentGuard::IP_PER_MIN; $user++ ) {
@@ -186,32 +247,51 @@ final class AgentGuardTest extends TestCase {
 		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_guard_error' );
 	}
 
-	public function test_policy_filter_can_deny_but_never_allow(): void {
-		Filters\expectApplied( 'agentporter_guard_decision' )->once()->andReturn( new \WP_Error( 'policy_hours', 'Outside allowed hours' ) );
+	public function test_policy_listener_can_deny_with_a_sanitised_code(): void {
+		Actions\expectDone( 'agentporter_guard_check' )->once()->whenHappen(
+			static function ( GuardDenials $denials ) {
+				$denials->deny( 'Outside Hours for bob@example.com!' );
+			}
+		);
 		$denied = $this->guard()->check( self::ABILITY, $this->context() );
-		$this->assertDenied( $denied, 'policy_hours' );
+		$this->assertDenied( $denied, 'agentporter_policy_outsidehoursforbobexamplecom' );
+		$this->assertSame( 'This action is not available.', $denied->get_error_message(), 'Policy text never reaches the caller.' );
+		$this->assertSame( array( 'status' => 403 ), $denied->get_error_data() );
 	}
 
-	public function test_policy_filter_returning_anything_but_true_denies(): void {
-		foreach ( array( false, 1, 'yes', null, array() ) as $value ) {
-			Filters\expectApplied( 'agentporter_guard_decision' )->once()->andReturn( $value );
-			$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_policy_denied' );
-		}
+	public function test_later_policy_listener_cannot_cancel_an_earlier_denial(): void {
+		Actions\expectDone( 'agentporter_guard_check' )->once()->whenHappen(
+			static function ( GuardDenials $denials ) {
+				$denials->deny( 'membership' );
+				// A later listener has no way to remove it: the collector only adds.
+			}
+		);
+		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_policy_membership' );
 	}
 
-	public function test_policy_filter_cannot_override_an_earlier_denial(): void {
-		Filters\expectApplied( 'agentporter_guard_decision' )->never();
+	public function test_policy_cannot_override_an_earlier_built_in_denial(): void {
+		Actions\expectDone( 'agentporter_guard_check' )->never();
 		$this->options[ KillSwitch::OPTION ] = '1';
 		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_agents_disabled' );
 	}
 
+	public function test_throwing_policy_listener_denies(): void {
+		Actions\expectDone( 'agentporter_guard_check' )->once()->whenHappen(
+			static function () {
+				throw new \RuntimeException( 'policy broke' );
+			}
+		);
+		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_guard_error' );
+	}
+
 	public function test_exception_anywhere_denies(): void {
-		Functions\when( 'user_can' )->alias(
+		Functions\when( 'get_userdata' )->alias(
 			static function () {
 				throw new \RuntimeException( 'capability layer broke' );
 			}
 		);
-		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_guard_error' );
+		$this->assertDenied( $this->guard()->check( self::ABILITY, $this->context() ), 'agentporter_forbidden' );
+		$this->assertSame( 'agentporter_guard_error', $this->wpdb->inserted[0][1]['error_code'] );
 	}
 
 	public function test_denials_are_audited_with_truncated_ip_and_generic_message(): void {

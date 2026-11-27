@@ -61,7 +61,9 @@ final class RateLimiterTest extends TestCase {
 	}
 
 	public function test_unusual_or_long_keys_are_hashed_and_bounded(): void {
-		$this->assertSame( 'actor:app_password:12', RateLimiter::key( 'actor:app_password:12' ) );
+		$this->assertSame( 'r:user:12', RateLimiter::key( 'user:12' ) );
+		$this->assertNotSame( RateLimiter::key( 'h:' . str_repeat( 'a', 40 ) ), 'h:' . str_repeat( 'a', 40 ), 'Raw keys cannot collide with hashed ones.' );
+		$this->assertStringStartsWith( 'h:', RateLimiter::key( "user:12\n" ), 'Trailing newline is not a valid raw key.' );
 		$hashed = RateLimiter::key( "evil'; DROP TABLE x; --" . str_repeat( 'z', 200 ) );
 		$this->assertMatchesRegularExpression( '/^h:[0-9a-f]{40}$/', $hashed );
 		$this->assertLessThanOrEqual( 80, strlen( $hashed ) );

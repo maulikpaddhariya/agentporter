@@ -68,6 +68,16 @@ final class KillSwitch {
 	 * @param bool $on New state.
 	 */
 	public function set( bool $on ): void {
-		update_option( self::OPTION, $on ? '1' : '0', true );
+		// Not autoloaded: kept out of the shared alloptions entry (and its known write-back race).
+		update_option( self::OPTION, $on ? '1' : '0', false );
+	}
+
+	/**
+	 * Re-reads the switch from the database. Long-running processes (WP-CLI, background jobs) call
+	 * this before each batch so turning the switch on stops work already in progress.
+	 */
+	public function refresh(): bool {
+		wp_cache_delete( self::OPTION, 'options' );
+		return $this->is_on();
 	}
 }
