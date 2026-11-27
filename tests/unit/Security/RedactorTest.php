@@ -145,6 +145,23 @@ final class RedactorTest extends TestCase {
 			'token auth scheme'       => array( 'Authorization: Token abcdefgh', 'abcdefgh' ),
 			'digest auth scheme'      => array( 'Authorization: Digest username="a", response="xyz"', 'xyz' ),
 			'second cookie'           => array( 'Cookie: a=1; wordpress_logged_in_x=admin%7Cabc', 'admin%7Cabc' ),
+			'after error prefix'      => array( 'Error: password=hunter2', 'hunter2' ),
+			'after glued prefix'      => array( 'ERROR:password=hunter2', 'hunter2' ),
+			'after msg prefix'        => array( 'msg:password=hunter2', 'hunter2' ),
+			'prefixed after error'    => array( 'error:db_password=hunter2', 'hunter2' ),
+			'token in url'            => array( 'see https://x.test/?token=abc123', 'abc123' ),
+			'token in nested url'     => array( 'url=https://x.test/?access_token=SECRETvalue', 'SECRETvalue' ),
+			'oauth code in redirect'  => array( 'redirect=https://x/cb?code=abcXYZ', 'abcXYZ' ),
+			'single quoted pair'      => array( "'pwd': 'hunter2'", 'hunter2' ),
+			'single quoted spaces'    => array( "password='hunter 2 with spaces'", 'with spaces' ),
+			'unterminated double'     => array( 'password="hunter2', 'hunter2' ),
+			'cut json value'          => array( '"password":"hunter2 and more', 'hunter2' ),
+			'print_r dump'            => array( "Array\n(\n    [user_pass] => hunter2\n)", 'hunter2' ),
+			'var_export dump'         => array( "array (\n  'user_pass' => 'hunter2',\n)", 'hunter2' ),
+			'arrow separator'         => array( 'password -> hunter2', 'hunter2' ),
+			'fat arrow capitalised'   => array( 'Password => hunter2', 'hunter2' ),
+			'upi vpa'                 => array( 'pay bob.smith@okicici now', 'bob.smith' ),
+			'us phone'                => array( 'call (555) 123-4567 today', '123-4567' ),
 		);
 	}
 
@@ -196,8 +213,61 @@ final class RedactorTest extends TestCase {
 	}
 
 	public function test_ordinary_text_is_left_alone(): void {
-		$text = 'Note: shoes size=42 colour: blue, see https://example.org/path?q=red at 10:30';
+		$text = 'Note: shoes size=42 colour: blue, see https://example.org/path?q=red at 10:30:45, mac 0a:1b:2c:3d:4e:5f';
 		$this->assertSame( $text, ( new Redactor() )->redact_string( $text ) );
+	}
+
+	public function test_quoted_value_split_by_truncation_does_not_leak(): void {
+		$out = ( new Redactor() )->redact_string( 'password="' . str_repeat( 'S3cr', 600 ) . '"' );
+		$this->assertStringNotContainsString( 'S3crS3cr', $out );
+	}
+
+	public function test_filter_fields_apply_to_free_text_pairs(): void {
+		Filters\expectApplied( 'agentporter_redact_fields' )->andReturn( array( 'license' ) );
+		$json = ( new Redactor() )->to_json( array( 'note' => 'license=ABC-123 ok' ) );
+		$this->assertStringNotContainsString( 'ABC-123', $json );
+	}
+
+	public function test_wpnonce_csrf_refresh_and_oauth_code_keys_are_masked(): void {
+		$keys = array( '_wpnonce', 'wpnonce', 'csrf_token', 'xsrf', 'refresh', 'verification_code', 'auth_code' );
+		$out  = ( new Redactor() )->redact( array_fill_keys( $keys, 'v4lue' ) );
+		foreach ( $keys as $key ) {
+			$this->assertSame( Redactor::MASK, $out[ $key ], $key );
+		}
+	}
+
+	public function test_many_long_keys_redact_within_50ms(): void {
+		$wide  = array();
+		$chunk = str_repeat( 'k', 2000 );
+		for ( $i = 0; $i < 49; $i++ ) {
+			$row = array();
+			for ( $j = 0; $j < 100; $j++ ) {
+				$row[ $chunk . $i . '_' . $j ] = 'v';
+			}
+			$wide[] = $row;
+		}
+		$huge_keys = array();
+		for ( $j = 0; $j < 100; $j++ ) {
+			$huge_keys[ str_repeat( 'q', 100000 ) . $j ] = 'v';
+		}
+		foreach ( array( $wide, $huge_keys ) as $i => $input ) {
+			$start = microtime( true );
+			( new Redactor() )->to_json( $input );
+			$this->assertLessThan( 0.05, microtime( true ) - $start, "key-heavy set $i" );
+		}
+	}
+
+	public function test_json_string_is_charged_its_full_length_against_the_text_budget(): void {
+		$big  = (string) json_encode( array( 'x' => str_repeat( 'abcdefghij', 4000 ) ) ); // ~40 KB of JSON text.
+		$json = ( new Redactor() )->to_json(
+			array(
+				'a' => $big,
+				'b' => $big,
+			) 
+		);
+		$this->assertStringContainsString( '"b":"[limit]"', $json, 'the first 40 KB string spent most of the 64 KB budget' );
+		$huge = ( new Redactor() )->to_json( array( 'a' => (string) json_encode( array( 'x' => str_repeat( 'abcdefghij', 7000 ) ) ) ) );
+		$this->assertStringNotContainsString( 'abcdefghij', $huge );
 	}
 
 	public function test_malformed_and_over_depth_json_strings_are_dropped(): void {

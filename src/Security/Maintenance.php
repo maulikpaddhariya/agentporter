@@ -39,6 +39,10 @@ final class Maintenance {
 	 * Schedules the hourly event if it is missing.
 	 */
 	public static function ensure_scheduled(): void {
+		// admin_init also runs for anonymous admin-ajax/admin-post requests; only admins write the cron option.
+		if ( ! ( defined( 'WP_CLI' ) && WP_CLI ) && ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
 		if ( false === wp_next_scheduled( self::HOOK ) ) {
 			wp_schedule_event( time() + 5 * MINUTE_IN_SECONDS, 'hourly', self::HOOK );
 		}
@@ -49,6 +53,34 @@ final class Maintenance {
 	 */
 	public static function unschedule(): void {
 		wp_clear_scheduled_hook( self::HOOK );
+	}
+
+	/**
+	 * Removes the event on every site of the network, in batches (network deactivation).
+	 */
+	public static function unschedule_network(): void {
+		$offset = 0;
+		do {
+			$ids = get_sites(
+				array(
+					'fields'                 => 'ids',
+					'number'                 => 100,
+					'offset'                 => $offset,
+					'network_id'             => get_current_network_id(),
+					'update_site_meta_cache' => false,
+				)
+			);
+			foreach ( $ids as $id ) {
+				switch_to_blog( (int) $id );
+				try {
+					wp_clear_scheduled_hook( self::HOOK );
+				} finally {
+					restore_current_blog();
+				}
+			}
+			$offset += 100;
+			$batch   = count( $ids );
+		} while ( 100 === $batch );
 	}
 
 	/**

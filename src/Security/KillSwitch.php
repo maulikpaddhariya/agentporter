@@ -91,13 +91,15 @@ final class KillSwitch {
 		global $wpdb;
 		$suppress = $wpdb->suppress_errors( true );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- must bypass the options cache.
-		$value = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s LIMIT 1', $wpdb->options, self::OPTION ) );
+		$rows  = $wpdb->query( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s LIMIT 1', $wpdb->options, self::OPTION ) );
 		$error = (string) $wpdb->last_error;
 		$wpdb->suppress_errors( $suppress );
 
-		if ( '' !== $error ) {
-			return true; // Cannot read the switch: fail closed.
+		// Not connected, query blanked by a filter, or a DB error: the switch cannot be read, so fail closed.
+		if ( false === $rows || '' !== $error ) {
+			return true;
 		}
+		$value = ( $rows > 0 && isset( $wpdb->last_result[0]->option_value ) ) ? $wpdb->last_result[0]->option_value : null;
 		$value = null === $value ? null : maybe_unserialize( $value );
 		return self::interpret( $value );
 	}

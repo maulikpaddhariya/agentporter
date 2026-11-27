@@ -63,7 +63,15 @@ final class MaintenanceTest extends TestCase {
 		$this->assertCount( 1, $wpdb->queries ); // Audit only.
 	}
 
+	public function test_scheduling_needs_an_administrator(): void {
+		Functions\when( 'current_user_can' )->justReturn( false );
+		Functions\expect( 'wp_schedule_event' )->never();
+		Maintenance::ensure_scheduled();
+		$this->addToAssertionCount( 1 );
+	}
+
 	public function test_scheduling_is_idempotent_and_unscheduling_clears(): void {
+		Functions\when( 'current_user_can' )->justReturn( true );
 		Functions\expect( 'wp_next_scheduled' )->twice()->with( Maintenance::HOOK )->andReturn( false, 1234 );
 		Functions\expect( 'wp_schedule_event' )->once()->with( \Mockery::type( 'int' ), 'hourly', Maintenance::HOOK );
 		Maintenance::ensure_scheduled();

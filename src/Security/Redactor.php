@@ -95,7 +95,7 @@ final class Redactor {
 	/**
 	 * Words that make a field sensitive anywhere in its name (substring match).
 	 */
-	private const SENSITIVE_WORDS = array( 'pass', 'secret', 'token', 'credential', 'apikey', 'cookie', 'signature', 'authorization', 'privatekey', 'sessid', 'sessionid', 'cardnum', 'phonenum' );
+	private const SENSITIVE_WORDS = array( 'pass', 'secret', 'token', 'credential', 'apikey', 'cookie', 'signature', 'authorization', 'privatekey', 'sessid', 'sessionid', 'cardnum', 'phonenum', 'nonce', 'csrf', 'xsrf', 'refresh', 'verificationcode', 'oauthcode' );
 
 	/**
 	 * Extra segments that mark a key=value pair in free text as secret (OAuth codes and similar).
@@ -115,6 +115,13 @@ final class Redactor {
 	 * @var int
 	 */
 	private int $text_budget = self::MAX_TEXT;
+
+	/**
+	 * Filter-added field names for the current redaction (null = not read yet).
+	 *
+	 * @var array<string, true>|null
+	 */
+	private ?array $extra_cache = null;
 
 	/**
 	 * Redacts any value and returns JSON no longer than $max_bytes.
@@ -152,6 +159,7 @@ final class Redactor {
 		if ( 0 === $depth ) {
 			$this->budget      = self::MAX_NODES;
 			$this->text_budget = self::MAX_TEXT;
+			$this->extra_cache = null;
 		}
 		if ( --$this->budget < 0 ) {
 			return '[limit]';
@@ -203,12 +211,13 @@ final class Redactor {
 			'/\b[A-Za-z0-9]{4}(?: [A-Za-z0-9]{4}){5}\b/' => '[app-password]',
 			// The local part starts at a boundary so each "@" is tried once, not once per preceding character.
 			'/(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]++@[\p{L}\p{N}.-]{1,253}\.\p{L}{2,24}/u' => '[email]',
+			// UPI payment addresses and other user@handle identifiers without a dotted domain.
+			'/(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._-]{2,}+@[A-Za-z][A-Za-z0-9-]{1,63}+(?![.\p{L}\p{N}@-])/u' => '[email]',
 			'/\b(?:\d{1,3}\.){3}\d{1,3}\b/'              => '[ip]',
-			'/(?<![\w:])(?=[0-9a-f:]*[0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/i' => '[ip]',
 		);
 		// Credential schemes first, so "Authorization: Basic …" loses the credential, not just the word "Basic".
 		$result = preg_replace( array_keys( $patterns ), array_values( $patterns ), $text );
-		$result = null === $result ? null : self::replace_key_values( $result );
+		$result = null === $result ? null : $this->replace_key_values( $result );
 		// Long random-looking runs (hex, base64, base64url) containing at least one digit. Possessive and
 		// anchored at the start of a run, so a long run costs one pass; the digit test is a plain scan.
 		$result = null === $result ? null : preg_replace_callback(
@@ -216,8 +225,14 @@ final class Redactor {
 			static fn( array $m ): string => strpbrk( $m[0], '0123456789' ) === false ? $m[0] : '[token]',
 			$result
 		);
-		// Phone and card numbers: 9+ digits, separators allowed, even glued to letters or before a full stop.
-		$result = null === $result ? null : preg_replace( '/(?<!\d)\+?\d(?:[\s().-]?+\d){8,}+(?!\d)/', '[number]', $result );
+		// IPv6: hex-and-colon runs that are valid addresses (so clock times and MAC addresses stay).
+		$result = null === $result ? null : preg_replace_callback(
+			'/(?<![\w:])[0-9A-Fa-f:]{2,45}+(?![\w:])/',
+			static fn( array $m ): string => str_contains( $m[0], ':' ) && false !== filter_var( $m[0], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ? '[ip]' : $m[0],
+			$result
+		);
+		// Phone and card numbers: 9+ digits, separators allowed ("(555) 123-4567"), even glued to letters.
+		$result = null === $result ? null : preg_replace( '/(?<!\d)\+?\d(?:[\s().-]{0,2}+\d){8,}+(?!\d)/', '[number]', $result );
 		// If a pattern fails (for example invalid UTF-8 for the /u pattern), never return the raw text.
 		$text = is_string( $result ) ? $result : '[unredactable]';
 		if ( function_exists( 'mb_strlen' ) && mb_strlen( $text, 'UTF-8' ) > self::MAX_STRING ) {
@@ -227,27 +242,73 @@ final class Redactor {
 	}
 
 	/**
-	 * Masks the value of key=value / key: value / "key": "value" pairs whose key is sensitive. Any
-	 * identifier is a candidate (so db_password=, MY_SECRET=, user_pass: all count); the key is then
-	 * judged by the same rules as field names.
+	 * Masks the value of key=value, key: value, "key": "value", 'key' => 'value', [key] => value and
+	 * key -> value pairs whose key is sensitive. Any identifier is a candidate (so db_password=,
+	 * MY_SECRET=, user_pass: all count); the key is judged by the same rules as field names, including
+	 * names added through agentporter_redact_fields.
+	 *
+	 * Each match consumes only the key and separator; the value is captured in a lookahead. So a
+	 * non-sensitive prefix such as "Error:" or "https:" never swallows a later pair, and scanning
+	 * continues inside it. Quoted values run to the closing quote, or to the end of the line when the
+	 * quote is unterminated (for example cut off by truncation). Linear: each start is tried once.
 	 *
 	 * @param string $text Text.
 	 */
-	private static function replace_key_values( string $text ): ?string {
-		return preg_replace_callback(
-			'/(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]{0,63}+)("?+\s*+[=:]\s*+)(?:"((?:[^"\\\\]++|\\\\.)*+)"|([^\s&"\',;]++))/',
-			static function ( array $m ): string {
-				$key        = $m[1];
-				$normalised = self::normalise_key( $key );
-				$sensitive  = ( new self() )->is_sensitive_field( $key )
-					|| array_intersect( explode( '_', $normalised ), self::TEXT_ONLY_SEGMENTS ) !== array();
-				if ( ! $sensitive ) {
-					return $m[0];
-				}
-				return $key . $m[2] . ( isset( $m[4] ) ? '' : '"' ) . self::MASK . ( isset( $m[4] ) ? '' : '"' );
-			},
-			$text
+	private function replace_key_values( string $text ): ?string {
+		$found = preg_match_all(
+			'/(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]{0,63}+)(["\'\]]?+[ \t]*+(?:=>|->|=|:)[ \t]*+)/',
+			$text,
+			$matches,
+			PREG_SET_ORDER | PREG_OFFSET_CAPTURE
 		);
+		if ( false === $found ) {
+			return null;
+		}
+		$extra   = $this->extras();
+		$verdict = array(); // Repeated keys are judged once.
+		$out     = '';
+		$cursor  = 0;
+		foreach ( $matches as $m ) {
+			$value_start = (int) $m[2][1] + strlen( (string) $m[2][0] );
+			if ( $value_start <= $cursor ) {
+				continue;
+			}
+			$key               = strtolower( (string) $m[1][0] );
+			$verdict[ $key ] ??= $this->is_sensitive_text_key( (string) $m[1][0], $extra );
+			if ( ! $verdict[ $key ] ) {
+				continue; // Inside a value already masked, or a key that is not sensitive.
+			}
+			// Only sensitive keys scan their value, so the scan stays linear in the text length.
+			if ( 1 !== preg_match( '/\G(?:"(?:[^"\\\\\r\n]++|\\\\.)*+"?|\'(?:[^\'\\\\\r\n]++|\\\\.)*+\'?|[^\s&"\',;]++)/', $text, $v, 0, $value_start ) ) {
+				continue;
+			}
+			$value  = $v[0];
+			$quote  = ( '"' === $value[0] || "'" === $value[0] ) ? $value[0] : '';
+			$out   .= substr( $text, $cursor, $value_start - $cursor ) . $quote . self::MASK . $quote;
+			$cursor = $value_start + strlen( $value );
+		}
+		return $out . substr( $text, $cursor );
+	}
+
+	/**
+	 * Whether a key found in free text marks its value as secret.
+	 *
+	 * @param string              $key   Key.
+	 * @param array<string, true> $extra Extra names from the filter.
+	 */
+	private function is_sensitive_text_key( string $key, array $extra ): bool {
+		return $this->is_sensitive_field( $key, $extra )
+			|| array_intersect( explode( '_', self::normalise_key( $key ) ), self::TEXT_ONLY_SEGMENTS ) !== array();
+	}
+
+	/**
+	 * Filter-added field names, read once per redaction.
+	 *
+	 * @return array<string, true>
+	 */
+	private function extras(): array {
+		$this->extra_cache ??= $this->extra_fields();
+		return $this->extra_cache;
 	}
 
 	/**
@@ -292,7 +353,7 @@ final class Redactor {
 	 * @param array<string, true> $extra Extra normalised names from the filter.
 	 */
 	public function is_sensitive_field( string $key, array $extra = array() ): bool {
-		$normalised = self::normalise_key( $key );
+		$normalised = self::normalise_key( substr( $key, 0, self::MAX_STRING * 4 ) );
 		if ( isset( $extra[ $normalised ] ) ) {
 			return true;
 		}
@@ -331,13 +392,20 @@ final class Redactor {
 	private function redact_array( array $data, int $depth ): array {
 		$out   = array();
 		$count = 0;
-		$extra = $this->extra_fields();
+		$extra = $this->extras();
 		foreach ( $data as $key => $value ) {
 			if ( ++$count > self::MAX_ITEMS ) {
 				$out['_more'] = count( $data ) - self::MAX_ITEMS;
 				break;
 			}
 			if ( is_string( $key ) ) {
+				// Keys cost text budget like values; a long key is judged and shown by its first part only.
+				$key                = substr( $key, 0, self::MAX_STRING * 4 );
+				$this->text_budget -= strlen( $key );
+				if ( $this->text_budget < 0 ) {
+					$out['_limit'] = true;
+					break;
+				}
 				$safe_key = $this->redact_string( $key );
 			} else {
 				$number   = self::redact_number( $key );
@@ -361,11 +429,13 @@ final class Redactor {
 	 * @return array<array-key, mixed>|string
 	 */
 	private function redact_text_or_json( string $text, int $depth ): array|string {
-		$this->text_budget -= min( strlen( $text ), self::MAX_STRING * 4 );
+		$is_json = self::looks_like_json( $text );
+		// JSON is decoded in full, so it costs its full length; plain text is cut to MAX_STRING * 4 first.
+		$this->text_budget -= $is_json ? strlen( $text ) : min( strlen( $text ), self::MAX_STRING * 4 );
 		if ( $this->text_budget < 0 ) {
 			return '[limit]';
 		}
-		if ( self::looks_like_json( $text ) ) {
+		if ( $is_json ) {
 			$decoded = strlen( $text ) <= self::MAX_TEXT ? json_decode( $text, true, max( 1, self::MAX_DEPTH - $depth ) ) : null;
 			// Malformed, truncated, too deep or too long: its keys can't be judged, so keep none of it.
 			return is_array( $decoded ) ? $this->redact_array( $decoded, $depth + 1 ) : '[unparsed-json]';

@@ -198,6 +198,9 @@ final class SecurityCoreTest extends \WP_UnitTestCase {
 		$this->assertNotFalse( has_action( \AgentPorter\Security\Maintenance::HOOK ) );
 		wp_clear_scheduled_hook( \AgentPorter\Security\Maintenance::HOOK );
 		\AgentPorter\Security\Maintenance::ensure_scheduled();
+		$this->assertFalse( wp_next_scheduled( \AgentPorter\Security\Maintenance::HOOK ), 'anonymous requests never schedule' );
+		wp_set_current_user( self::factory()->user->create( array( 'role' => 'administrator' ) ) );
+		\AgentPorter\Security\Maintenance::ensure_scheduled();
 		$this->assertNotFalse( wp_next_scheduled( \AgentPorter\Security\Maintenance::HOOK ) );
 
 		$rate  = $wpdb->prefix . Schema::RATE;
@@ -245,6 +248,34 @@ final class SecurityCoreTest extends \WP_UnitTestCase {
 
 		\AgentPorter\Core\Activator::deactivate();
 		$this->assertFalse( wp_next_scheduled( \AgentPorter\Security\Maintenance::HOOK ) );
+	}
+
+	public function test_network_deactivation_clears_maintenance_on_every_site(): void {
+		if ( ! is_multisite() ) {
+			$this->markTestSkipped( 'Multisite only.' );
+		}
+		$sites = array( get_current_blog_id(), self::factory()->blog->create(), self::factory()->blog->create() );
+		foreach ( $sites as $id ) {
+			switch_to_blog( $id );
+			wp_schedule_event( time() + 300, 'hourly', \AgentPorter\Security\Maintenance::HOOK );
+			restore_current_blog();
+		}
+		\AgentPorter\Core\Activator::deactivate( true );
+		foreach ( $sites as $id ) {
+			switch_to_blog( $id );
+			$this->assertFalse( wp_next_scheduled( \AgentPorter\Security\Maintenance::HOOK ), "site $id" );
+			restore_current_blog();
+		}
+	}
+
+	public function test_refresh_is_on_when_the_query_is_blanked_by_a_filter(): void {
+		update_option( KillSwitch::OPTION, '1', false );
+		add_filter( 'query', '__return_empty_string' );
+		try {
+			$this->assertTrue( ( new KillSwitch( false ) )->refresh() );
+		} finally {
+			remove_filter( 'query', '__return_empty_string' );
+		}
 	}
 
 	public function test_refresh_sees_switch_enabled_by_another_process_when_option_was_missing(): void {

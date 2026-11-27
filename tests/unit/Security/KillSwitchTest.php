@@ -69,9 +69,10 @@ final class KillSwitchTest extends TestCase {
 	 * @param string $error Simulated last_error after the read.
 	 */
 	private function wpdb( $row, string $error = '' ): \wpdb {
-		$GLOBALS['wpdb']             = new \wpdb(); // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Test double for the global KillSwitch::refresh() reads.
-		$GLOBALS['wpdb']->var_result = $row;
-		$GLOBALS['wpdb']->last_error = $error;
+		$GLOBALS['wpdb']                = new \wpdb(); // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Test double for the global KillSwitch::refresh() reads.
+		$GLOBALS['wpdb']->query_results = array( '' === $error ? ( null === $row ? 0 : 1 ) : false );
+		$GLOBALS['wpdb']->last_result   = null === $row ? array() : array( (object) array( 'option_value' => $row ) );
+		$GLOBALS['wpdb']->last_error    = $error;
 		Functions\when( 'maybe_unserialize' )->returnArg();
 		return $GLOBALS['wpdb'];
 	}
@@ -104,6 +105,14 @@ final class KillSwitchTest extends TestCase {
 		$this->wpdb( '0' );
 		$this->assertFalse( ( new KillSwitch( false ) )->refresh() );
 		$this->wpdb( 'garbage' );
+		$this->assertTrue( ( new KillSwitch( false ) )->refresh() );
+	}
+
+	public function test_refresh_is_on_when_the_query_never_runs(): void {
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
+		Functions\when( 'wp_cache_get' )->justReturn( false );
+		$db                = $this->wpdb( null ); // Not ready / query blanked by a filter: query() returns false, no error.
+		$db->query_results = array( false );
 		$this->assertTrue( ( new KillSwitch( false ) )->refresh() );
 	}
 

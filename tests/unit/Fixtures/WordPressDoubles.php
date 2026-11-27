@@ -55,6 +55,7 @@ if ( ! class_exists( 'wpdb' ) ) {
 			return $query;
 		}
 		public $query_results = array();
+		public $last_result   = array();
 		public function query( $query ) {
 			$this->queries[] = $query;
 			if ( $this->fail ) {

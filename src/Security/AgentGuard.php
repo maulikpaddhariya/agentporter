@@ -74,6 +74,13 @@ final class AgentGuard {
 	private ?string $bucket_key = null;
 
 	/**
+	 * Unix time until which the site-wide denial audit budget is known to be spent (this request).
+	 *
+	 * @var int
+	 */
+	private int $site_audit_full_until = 0;
+
+	/**
 	 * Static entry point used by permission callbacks. Denies if the plugin or guard is unavailable.
 	 *
 	 * @param string            $ability Ability name, for example "agentporter/site-info".
@@ -341,7 +348,12 @@ final class AgentGuard {
 		}
 		// Site ceiling first, so a flood spread over many networks creates no per-network counters
 		// once the ceiling is reached.
-		if ( ! $this->rate_limiter->hit( 'audit-deny:site', self::AUDIT_SITE_MAX, 60 )->allowed ) {
+		if ( time() < $this->site_audit_full_until ) {
+			return 'site-known'; // Already spent and marked: no further counter writes this window.
+		}
+		$site = $this->rate_limiter->hit( 'audit-deny:site', self::AUDIT_SITE_MAX, 60 );
+		if ( ! $site->allowed ) {
+			$this->site_audit_full_until = time() + $site->retry_after;
 			return 'site';
 		}
 		return $this->rate_limiter->hit( $this->network_bucket( 'audit-deny', $context->ip ), self::AUDIT_DENIALS, 60 )->allowed ? null : 'network';
@@ -356,7 +368,7 @@ final class AgentGuard {
 	 * @param AgentContext $context Caller.
 	 */
 	private function record_suppression( string $scope, string $ability, AgentContext $context ): void {
-		if ( 'network' === $scope ) {
+		if ( 'network' === $scope || 'site-known' === $scope ) {
 			return;
 		}
 		$bucket = 'user' === $scope ? 'audit-suppressed:user:' . $context->user_id : 'audit-suppressed:site';
