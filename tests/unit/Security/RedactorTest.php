@@ -162,6 +162,13 @@ final class RedactorTest extends TestCase {
 			'fat arrow capitalised'   => array( 'Password => hunter2', 'hunter2' ),
 			'upi vpa'                 => array( 'pay bob.smith@okicici now', 'bob.smith' ),
 			'us phone'                => array( 'call (555) 123-4567 today', '123-4567' ),
+			'double-encoded json'     => array( 'body={\\"user\\":\\"a\\",\\"password\\":\\"hunter2\\"}', 'hunter2' ),
+			'escaped double quotes'   => array( 'password=\\"hunter2\\"', 'hunter2' ),
+			'escaped single quotes'   => array( "password=\\'hunter2\\'", 'hunter2' ),
+			'very long key'           => array( str_repeat( 'a', 60 ) . '_password=hunter2', 'hunter2' ),
+			'semicolon in value'      => array( 'password=abc;hunter2', 'hunter2' ),
+			'newline after colon'     => array( "password:\n hunter2", 'hunter2' ),
+			'ipv6 glued to key'       => array( 'remote_addr:fe80::1', 'fe80' ),
 		);
 	}
 

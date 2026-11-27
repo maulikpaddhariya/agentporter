@@ -227,7 +227,7 @@ final class Redactor {
 		);
 		// IPv6: hex-and-colon runs that are valid addresses (so clock times and MAC addresses stay).
 		$result = null === $result ? null : preg_replace_callback(
-			'/(?<![\w:])[0-9A-Fa-f:]{2,45}+(?![\w:])/',
+			'/(?<!\w)(?<![^A-Za-z]:)(?<!^:)[0-9A-Fa-f:]{2,45}+(?![\w:])/',
 			static fn( array $m ): string => str_contains( $m[0], ':' ) && false !== filter_var( $m[0], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) ? '[ip]' : $m[0],
 			$result
 		);
@@ -256,7 +256,7 @@ final class Redactor {
 	 */
 	private function replace_key_values( string $text ): ?string {
 		$found = preg_match_all(
-			'/(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]{0,63}+)(["\'\]]?+[ \t]*+(?:=>|->|=|:)[ \t]*+)/',
+			'/(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]*+)((?:\\\\?["\']|\])?+[ \t]*+(?:=>|->|=|:)\s*+)/',
 			$text,
 			$matches,
 			PREG_SET_ORDER | PREG_OFFSET_CAPTURE
@@ -273,17 +273,19 @@ final class Redactor {
 			if ( $value_start <= $cursor ) {
 				continue;
 			}
-			$key               = strtolower( (string) $m[1][0] );
-			$verdict[ $key ] ??= $this->is_sensitive_text_key( (string) $m[1][0], $extra );
+			// Very long identifiers are judged by their last 64 characters (where "_password" would be).
+			$key               = strtolower( substr( (string) $m[1][0], -64 ) );
+			$verdict[ $key ] ??= $this->is_sensitive_text_key( $key, $extra );
 			if ( ! $verdict[ $key ] ) {
 				continue; // Inside a value already masked, or a key that is not sensitive.
 			}
 			// Only sensitive keys scan their value, so the scan stays linear in the text length.
-			if ( 1 !== preg_match( '/\G(?:"(?:[^"\\\\\r\n]++|\\\\.)*+"?|\'(?:[^\'\\\\\r\n]++|\\\\.)*+\'?|[^\s&"\',;]++)/', $text, $v, 0, $value_start ) ) {
+			// Escaped quotes (\"…\", as in double-encoded JSON), quoted, or bare up to whitespace or '&'.
+			if ( 1 !== preg_match( '/\G(?:\\\\"(?:[^"\\\\\r\n]++|\\\\[^"])*+(?:\\\\")?|\\\\\'(?:[^\'\\\\\r\n]++|\\\\[^\'])*+(?:\\\\\')?|"(?:[^"\\\\\r\n]++|\\.)*+"?|\'(?:[^\'\\\\\r\n]++|\\.)*+\'?|[^\s&"\']++)/', $text, $v, 0, $value_start ) ) {
 				continue;
 			}
 			$value  = $v[0];
-			$quote  = ( '"' === $value[0] || "'" === $value[0] ) ? $value[0] : '';
+			$quote  = '\\' === $value[0] ? substr( $value, 0, 2 ) : ( ( '"' === $value[0] || "'" === $value[0] ) ? $value[0] : '' );
 			$out   .= substr( $text, $cursor, $value_start - $cursor ) . $quote . self::MASK . $quote;
 			$cursor = $value_start + strlen( $value );
 		}
