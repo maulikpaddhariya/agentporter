@@ -26,7 +26,7 @@ final class DatabaseRateStore implements RateStore {
 	 * @param \wpdb  $wpdb   Database.
 	 * @param Schema $schema Schema (table names).
 	 */
-	public function __construct( private \wpdb $wpdb, private Schema $schema ) {
+	public function __construct( private readonly \wpdb $wpdb, private readonly Schema $schema ) {
 	}
 
 	/**

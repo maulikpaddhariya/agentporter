@@ -53,10 +53,10 @@ final class MigrationSubsystem implements Subsystem {
 			)
 		);
 
-		$hooks->add_action( 'admin_init', array( $this, 'on_admin_init' ) );
-		$hooks->add_action( 'init', array( $this, 'on_init' ) );
-		$hooks->add_action( 'wp_initialize_site', array( $this, 'on_initialize_site' ), 20 );
-		$hooks->add_action( 'wpmu_upgrade_site', array( $this, 'on_upgrade_site' ) );
+		$hooks->add_action( 'admin_init', $this->on_admin_init( ... ) );
+		$hooks->add_action( 'init', $this->on_init( ... ) );
+		$hooks->add_action( 'wp_initialize_site', $this->on_initialize_site( ... ), 20 );
+		$hooks->add_action( 'wpmu_upgrade_site', $this->on_upgrade_site( ... ) );
 	}
 
 	/**

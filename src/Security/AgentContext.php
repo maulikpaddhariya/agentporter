@@ -50,6 +50,6 @@ final class AgentContext {
 		$remote = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( (string) $_SERVER['REMOTE_ADDR'] ) ) : '';
 		$ip     = false !== filter_var( $remote, FILTER_VALIDATE_IP ) ? $remote : '';
 
-		return new self( $actor, get_current_user_id(), $ip, null );
+		return new self( $actor, get_current_user_id(), $ip );
 	}
 }

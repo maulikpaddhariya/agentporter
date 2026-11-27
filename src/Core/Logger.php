@@ -27,7 +27,7 @@ final class Logger {
 	 *
 	 * @var bool
 	 */
-	private bool $enabled;
+	private readonly bool $enabled;
 
 	/**
 	 * Constructor.

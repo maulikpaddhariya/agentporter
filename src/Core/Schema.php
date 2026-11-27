@@ -40,7 +40,7 @@ final class Schema {
 	 *
 	 * @param \wpdb $wpdb Database.
 	 */
-	public function __construct( private \wpdb $wpdb ) {
+	public function __construct( private readonly \wpdb $wpdb ) {
 	}
 
 	/**

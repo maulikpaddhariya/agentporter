@@ -1,0 +1,25 @@
+# PHPStan level 8 with WordPress stubs (STANDARDS §4.1). No baseline file is allowed.
+includes:
+	- vendor/szepeviktor/phpstan-wordpress/extension.neon
+	- vendor/phpstan/phpstan-deprecation-rules/rules.neon
+
+parameters:
+	level: 8
+	phpVersion: 80100
+	paths:
+		- agentporter.php
+		- uninstall.php
+		- src
+	scanFiles:
+		- vendor/php-stubs/woocommerce-stubs/woocommerce-stubs.php
+	bootstrapFiles:
+		- tests/phpstan/bootstrap.php
+	treatPhpDocTypesAsCertain: false
+	reportUnmatchedIgnoredErrors: true
+	ignoreErrors:
+		# wpdb::prepare() is typed string|null; it returns null only when called without placeholders or
+		# arguments (a programming error). Every call in src/ passes placeholders and arguments, and
+		# wpdb::query('') would fail closed anyway. Narrowly scoped to this exact message.
+		-
+			message: '#^Parameter \#1 \$query of method wpdb::(query|get_var|get_results|get_row|get_col)\(\) expects string, string\|null given\.$#'
+			identifier: argument.type

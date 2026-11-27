@@ -34,7 +34,7 @@ final class AuditLog {
 	 * @param Schema   $schema   Schema (table names).
 	 * @param Redactor $redactor Redactor.
 	 */
-	public function __construct( private \wpdb $wpdb, private Schema $schema, private Redactor $redactor ) {
+	public function __construct( private readonly \wpdb $wpdb, private readonly Schema $schema, private readonly Redactor $redactor ) {
 	}
 
 	/**

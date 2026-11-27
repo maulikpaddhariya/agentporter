@@ -49,9 +49,9 @@ final class Migrator {
 	 * @param array<int, callable(): void>|null $steps  Override steps (tests); null uses the shipped steps.
 	 */
 	public function __construct(
-		private \wpdb $wpdb,
-		private Schema $schema,
-		private Lock $lock,
+		private readonly \wpdb $wpdb,
+		private readonly Schema $schema,
+		private readonly Lock $lock,
 		?array $steps = null
 	) {
 		$this->steps = $steps ?? $this->default_steps();
@@ -65,7 +65,7 @@ final class Migrator {
 	 */
 	public function default_steps(): array {
 		return array(
-			1 => array( $this, 'create_tables' ),
+			1 => $this->create_tables( ... ),
 		);
 	}
 
@@ -73,7 +73,7 @@ final class Migrator {
 	 * Version the steps lead to.
 	 */
 	public function target_version(): int {
-		return array() === $this->steps ? 0 : (int) max( array_keys( $this->steps ) );
+		return array() === $this->steps ? 0 : max( array_keys( $this->steps ) );
 	}
 
 	/**

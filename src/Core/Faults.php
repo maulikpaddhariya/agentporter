@@ -67,7 +67,7 @@ final class Faults {
 	 *
 	 * @param Logger $logger Debug logger.
 	 */
-	public function __construct( private Logger $logger ) {
+	public function __construct( private readonly Logger $logger ) {
 	}
 
 	/**
@@ -215,7 +215,7 @@ final class Faults {
 	 * @param \Throwable $error Thrown value.
 	 */
 	public static function class_name( \Throwable $error ): string {
-		$name = get_class( $error );
+		$name = $error::class;
 		$pos  = strpos( $name, '@anonymous' );
 		return false === $pos ? $name : substr( $name, 0, $pos + strlen( '@anonymous' ) );
 	}

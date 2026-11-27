@@ -1,0 +1,17 @@
+{
+	"name": "agentporter/tools-psalm",
+	"description": "Psalm (taint analysis) for AgentPorter, isolated because it needs a newer PHP than the plugin's minimum.",
+	"type": "project",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=8.2",
+		"vimeo/psalm": "^6.0"
+	},
+	"config": {
+		"platform": {
+			"php": "8.4.99"
+		},
+		"sort-packages": true,
+		"allow-plugins": false
+	}
+}

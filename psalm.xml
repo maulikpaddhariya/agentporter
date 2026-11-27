@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!-- Psalm is used for taint analysis only (source -> sink: XSS, SQLi, SSRF, file, shell). Type checks are PHPStan's job. -->
+<psalm
+	errorLevel="8"
+	findUnusedBaselineEntry="false"
+	findUnusedCode="false"
+	phpVersion="8.1"
+	resolveFromConfigFile="true"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns="https://getpsalm.org/schema/config"
+	xsi:schemaLocation="https://getpsalm.org/schema/config tools/psalm/vendor/vimeo/psalm/config.xsd"
+>
+	<projectFiles>
+		<directory name="src"/>
+		<file name="agentporter.php"/>
+		<file name="uninstall.php"/>
+		<ignoreFiles>
+			<directory name="vendor"/>
+		</ignoreFiles>
+	</projectFiles>
+	<stubs>
+		<file name="vendor/php-stubs/wordpress-stubs/wordpress-stubs.php" preloadClasses="true"/>
+		<file name="vendor/php-stubs/woocommerce-stubs/woocommerce-stubs.php" preloadClasses="true"/>
+		<file name="tests/phpstan/bootstrap.php"/>
+		<file name="tests/psalm/wordpress-taint.phpstub"/>
+	</stubs>
+</psalm>

@@ -1,0 +1,117 @@
+# AgentPorter project rules (SECURITY-MODEL §5.4, §5.6). Run: semgrep --config .semgrep.yml --error src agentporter.php uninstall.php
+rules:
+  - id: agentporter-banned-functions
+    languages: [php]
+    severity: ERROR
+    message: Banned function (SECURITY-MODEL §5.6). Use a safe alternative.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: create_function(...)
+      - pattern: exec(...)
+      - pattern: shell_exec(...)
+      - pattern: system(...)
+      - pattern: passthru(...)
+      - pattern: proc_open(...)
+      - pattern: popen(...)
+      - pattern: pcntl_exec(...)
+      - pattern: extract(...)
+      - pattern: unserialize(...)
+      - pattern: assert($X)
+      - pattern: preg_replace("=~/.*\/[a-zA-Z]*e[a-zA-Z]*$/", ...)
+
+  - id: agentporter-backticks
+    languages: [regex]
+    severity: ERROR
+    message: Backtick shell execution is banned (SECURITY-MODEL §5.6).
+    pattern-regex: '(?m)^(?!\s*(\*|//|#)).*=\s*`[^`]+`'
+    paths:
+      include: ['*.php']
+
+  - id: agentporter-variable-include
+    languages: [php]
+    severity: ERROR
+    message: Includes must use fixed paths (a constant directory plus a string literal), never variables (SECURITY-MODEL §5.6).
+    patterns:
+      - pattern-either:
+          - pattern: include $X;
+          - pattern: include_once $X;
+          - pattern: require $X;
+          - pattern: require_once $X;
+      - pattern-not: include __DIR__ . "...";
+      - pattern-not: include_once __DIR__ . "...";
+      - pattern-not: require __DIR__ . "...";
+      - pattern-not: require_once __DIR__ . "...";
+      - pattern-not: require_once ABSPATH . "...";
+      - pattern-not: require ABSPATH . "...";
+      - pattern-not: require_once "...";
+      - pattern-not: require "...";
+
+  - id: agentporter-write-code-or-config
+    languages: [php]
+    severity: ERROR
+    message: Never write PHP, .htaccess or server configuration files (SECURITY-MODEL §5.6).
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: file_put_contents($PATH, ...)
+              - pattern: fopen($PATH, ...)
+              - pattern: $FS->put_contents($PATH, ...)
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: (?i)(\.php|\.phtml|\.htaccess|\.user\.ini|nginx\.conf|wp-config)
+      - pattern: insert_with_markers(...)
+
+  - id: agentporter-rest-route-without-permission-callback
+    languages: [php]
+    severity: ERROR
+    message: Every REST route needs a real permission_callback (SECURITY-MODEL §5.4).
+    patterns:
+      - pattern: register_rest_route($NS, $ROUTE, $ARGS, ...)
+      - pattern-not: register_rest_route($NS, $ROUTE, [..., 'permission_callback' => $CB, ...], ...)
+      - pattern-not: register_rest_route($NS, $ROUTE, array(..., 'permission_callback' => $CB, ...), ...)
+
+  - id: agentporter-public-permission-callback
+    languages: [php]
+    severity: ERROR
+    message: __return_true permission callbacks are allowed only for public endpoints listed in tests/security/public-routes.php (SECURITY-MODEL §5.4).
+    pattern-either:
+      - pattern: "array(..., 'permission_callback' => '__return_true', ...)"
+      - pattern: "[..., 'permission_callback' => '__return_true', ...]"
+    paths:
+      exclude: ['/src/Serve/PublicEndpoints.php', '/src/Tracking/BeaconEndpoint.php']
+
+  - id: agentporter-ability-without-guard
+    languages: [php]
+    severity: ERROR
+    message: Every agentporter/* ability must pass a permission_callback that calls AgentGuard::authorize() inline (SECURITY-MODEL §5.4).
+    patterns:
+      - pattern: wp_register_ability($NAME, $ARGS)
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: ^['"]agentporter/
+      - metavariable-pattern:
+          metavariable: $ARGS
+          language: generic
+          patterns:
+            - pattern-regex: (?s).+
+            - pattern-not-regex: AgentGuard::authorize
+
+  - id: agentporter-ajax-nopriv
+    languages: [php]
+    severity: ERROR
+    message: No wp_ajax_nopriv_ handlers at all (SECURITY-MODEL E7).
+    pattern: add_action("=~/^wp_ajax_nopriv_/", ...)
+
+  - id: agentporter-no-raw-secret-compare
+    languages: [php]
+    severity: ERROR
+    message: Compare secrets, tokens and signatures with hash_equals() (SECURITY-MODEL §5.5).
+    patterns:
+      - pattern-either:
+          - pattern: $TOKEN === $X
+          - pattern: $X === $TOKEN
+          - pattern: $TOKEN == $X
+          - pattern: $X == $TOKEN
+      - metavariable-regex:
+          metavariable: $TOKEN
+          regex: '^\$(token|secret|signature|hmac|api_key|key_hash|expected_signature)$'

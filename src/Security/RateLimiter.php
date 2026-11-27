@@ -23,7 +23,7 @@ final class RateLimiter {
 	 * @param RateStore     $store Counter storage.
 	 * @param \Closure|null $clock Returns the current Unix time (tests).
 	 */
-	public function __construct( private RateStore $store, private ?\Closure $clock = null ) {
+	public function __construct( private readonly RateStore $store, private readonly ?\Closure $clock = null ) {
 	}
 
 	/**

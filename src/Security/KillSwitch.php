@@ -22,19 +22,16 @@ final class KillSwitch {
 	public const CONSTANT = 'AGENTPORTER_DISABLE_AGENTS';
 
 	/**
-	 * Whether the constant forces the switch on (null = read the constant).
-	 *
-	 * @var bool|null
-	 */
-	private ?bool $forced;
-
-	/**
 	 * Constructor.
 	 *
 	 * @param bool|null $forced Override for the constant (tests); null reads AGENTPORTER_DISABLE_AGENTS.
 	 */
-	public function __construct( ?bool $forced = null ) {
-		$this->forced = $forced;
+	public function __construct(
+		/**
+		 * Whether the constant forces the switch on (null = read the constant).
+		 */
+		private readonly ?bool $forced = null
+	) {
 	}
 
 	/**

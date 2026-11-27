@@ -32,7 +32,7 @@ final class Lock {
 	 *
 	 * @var string
 	 */
-	private string $option;
+	private readonly string $option;
 
 	/**
 	 * Token of the lock we hold, or null.
@@ -49,7 +49,7 @@ final class Lock {
 	 * @param int    $ttl  Seconds after which a held lock is considered stale.
 	 * @throws \InvalidArgumentException For an invalid name or TTL.
 	 */
-	public function __construct( private \wpdb $wpdb, string $name, private int $ttl = 600 ) {
+	public function __construct( private readonly \wpdb $wpdb, string $name, private readonly int $ttl = 600 ) {
 		if ( 1 !== preg_match( '/^[a-z0-9_]{1,40}$/', $name ) || $ttl < 1 ) {
 			throw new \InvalidArgumentException( 'Invalid lock name or TTL.' );
 		}
@@ -68,7 +68,7 @@ final class Lock {
 		if ( null !== $this->token ) {
 			return $this->renew( $now );
 		}
-		$now   = $now ?? time();
+		$now ??= time();
 		$token = $this->make_token( $now );
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Atomic mutex: must hit the database, never a cache.
@@ -103,7 +103,7 @@ final class Lock {
 				$current
 			)
 		);
-		return 1 === $swapped ? $this->won( $token ) : false;
+		return 1 === $swapped && $this->won( $token );
 	}
 
 	/**

@@ -22,15 +22,15 @@ final class FaultNotice {
 	 *
 	 * @param Faults $faults Failure state.
 	 */
-	public function __construct( private Faults $faults ) {
+	public function __construct( private readonly Faults $faults ) {
 	}
 
 	/**
 	 * Registers the notice.
 	 */
 	public function register(): void {
-		add_action( 'admin_notices', array( $this, 'render' ) );
-		add_action( 'network_admin_notices', array( $this, 'render' ) );
+		add_action( 'admin_notices', $this->render( ... ) );
+		add_action( 'network_admin_notices', $this->render( ... ) );
 	}
 
 	/**

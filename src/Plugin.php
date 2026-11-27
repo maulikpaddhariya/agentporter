@@ -64,10 +64,10 @@ final class Plugin {
 	 * @phpstan-param list<class-string<Subsystem>> $critical_classes
 	 */
 	public function __construct(
-		private Container $container,
-		private Faults $faults,
-		private array $subsystems,
-		private array $critical_classes = array()
+		private readonly Container $container,
+		private readonly Faults $faults,
+		private readonly array $subsystems,
+		private readonly array $critical_classes = array()
 	) {
 	}
 
@@ -209,7 +209,7 @@ final class Plugin {
 			// Drop services the failed subsystem registered so nothing else can resolve half-built state.
 			try {
 				$this->container->rollback( $snapshot );
-			} catch ( \Throwable $rollback_error ) {
+			} catch ( \Throwable ) {
 				// The subsystem sealed or broke the container: treat as critical.
 				$this->faults->lock_down();
 			}
