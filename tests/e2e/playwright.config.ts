@@ -1,6 +1,7 @@
 /**
  * Playwright end-to-end tests against wp-env (tests instance, port 8889).
  */
+import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.WP_BASE_URL ?? 'http://localhost:8889';
@@ -24,7 +25,10 @@ export default defineConfig( {
 	globalSetup: require.resolve( './global-setup.ts' ),
 	use: {
 		baseURL,
-		storageState: 'test-results/storage-state.json',
+		storageState: path.join(
+			__dirname,
+			'../../test-results/storage-state.json'
+		),
 		trace: 'retain-on-failure',
 		screenshot: 'only-on-failure',
 	},

@@ -12,6 +12,7 @@
 	<exclude-pattern>/tools/*/vendor/*</exclude-pattern>
 	<!-- Deliberately broken files used to prove that each gate fails. Never shipped. -->
 	<exclude-pattern>/tests/seeded/fixtures/*</exclude-pattern>
+	<exclude-pattern>/tests/seeded/plugin-check/*</exclude-pattern>
 
 	<arg name="extensions" value="php"/>
 	<arg name="basepath" value="."/>

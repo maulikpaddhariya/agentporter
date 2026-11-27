@@ -1,0 +1,7 @@
+{
+	"source": { "directories": [ "src" ] },
+	"phpUnit": { "configDir": ".", "customPath": "../../../vendor/bin/phpunit" },
+	"logs": { "text": "../../../reports/infection-seeded.log" },
+	"mutators": { "@default": true },
+	"minMsi": 80
+}

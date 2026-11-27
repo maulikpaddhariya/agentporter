@@ -27,6 +27,10 @@ on:
       experimental:
         type: boolean
         default: false
+      extras:
+        description: Also run the bench harness and the seeded security/bench proofs.
+        type: boolean
+        default: false
         description: Allowed to fail (WordPress nightly, PHP in development).
 
 permissions:
@@ -103,3 +107,14 @@ jobs:
       - name: Lock race across real processes
         if: inputs.db-engine == 'mysql'
         run: php tests/concurrency/lock-race.php
+
+      - name: Security suite (authz matrix, public-route registry)
+        run: composer test:security
+
+      - name: Bench (gate timings, memory budgets)
+        if: inputs.extras
+        run: composer bench
+
+      - name: Seeded violations fail the security suite and the bench
+        if: inputs.extras
+        run: bin/check-seeded-tools.sh security bench

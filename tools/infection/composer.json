@@ -1,0 +1,19 @@
+{
+	"name": "agentporter/tools-infection",
+	"description": "Infection (mutation testing) for AgentPorter, isolated from the plugin's dev dependencies.",
+	"type": "project",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=8.2",
+		"infection/infection": "^0.29 || ^0.30 || ^0.31"
+	},
+	"config": {
+		"platform": {
+			"php": "8.4.99"
+		},
+		"sort-packages": true,
+		"allow-plugins": {
+			"infection/extension-installer": false
+		}
+	}
+}

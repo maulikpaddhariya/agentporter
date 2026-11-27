@@ -1,0 +1,11 @@
+name: Seeded broken workflow
+on: pull_request
+jobs:
+  broken:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.pull_request.title }}"
+      - uses: actions/checkout@v4
+        with:
+          not-an-input: true
+    needs: [does-not-exist]

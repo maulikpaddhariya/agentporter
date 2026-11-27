@@ -63,7 +63,19 @@
 		],
 		"test:unit": "phpunit -c phpunit.xml.dist",
 		"test:integration": "phpunit -c phpunit-integration.xml.dist",
-		"test:seeded": "bin/check-seeded-violations.sh"
+		"test:seeded": "bin/check-seeded-violations.sh",
+		"analyse": [
+			"phpstan analyse --no-progress --memory-limit=1G",
+			"@analyse:psalm",
+			"rector process --dry-run --no-progress-bar"
+		],
+		"analyse:psalm": "tools/psalm/vendor/bin/psalm --no-progress --taint-analysis",
+		"semgrep": "SEMGREP_ENABLE_VERSION_CHECK=0 semgrep --metrics=off --disable-version-check --error --config .semgrep.yml src uninstall.php agentporter.php",
+		"test:security": "phpunit -c phpunit-security.xml.dist",
+		"test:mutation": "tools/infection/vendor/bin/infection --no-progress",
+		"bench": "phpunit -c phpunit-bench.xml.dist",
+		"readme:validate": "php bin/validate-readme.php",
+		"test:seeded:tools": "bin/check-seeded-tools.sh phpstan psalm rector semgrep readme"
 	},
 	"scripts-descriptions": {
 		"lint": "PHPCS: WordPress Extra + Docs + VIP Go + PHPCompatibilityWP (8.1+).",

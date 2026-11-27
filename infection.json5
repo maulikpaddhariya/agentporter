@@ -1,0 +1,13 @@
+{
+	// Mutation testing on security code (STANDARDS-AND-COMPATIBILITY §4.4): minimum MSI 80%.
+	"$schema": "tools/infection/vendor/infection/infection/resources/schema.json",
+	"source": { "directories": [ "src/Security" ] },
+	"phpUnit": { "configDir": ".", "customPath": "vendor/bin/phpunit" },
+	"testFrameworkOptions": "--filter=Security",
+	"timeout": 20,
+	"threads": "max",
+	"logs": { "text": "reports/infection.log", "github": true, "summary": "reports/infection-summary.log" },
+	"mutators": { "@default": true },
+	"minMsi": 80,
+	"minCoveredMsi": 80
+}
