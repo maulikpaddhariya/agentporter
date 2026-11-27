@@ -70,6 +70,11 @@ function agentporter_race( callable $prepare ): int {
 			} catch ( \Throwable $e ) {
 				exit( 2 );
 			}
+			if ( $won ) {
+				// Report the token we hold so the parent can check the row really is ours.
+				$held = $GLOBALS['wpdb']->get_var( $GLOBALS['wpdb']->prepare( "SELECT option_value FROM {$GLOBALS['wpdb']->options} WHERE option_name = %s", 'agentporter_lock_' . $name ) );
+				file_put_contents( sys_get_temp_dir() . '/agentporter-race-' . getmypid(), (string) $held );
+			}
 			exit( $won ? 0 : 1 );
 		}
 		$pids[] = $pid;
@@ -80,14 +85,28 @@ function agentporter_race( callable $prepare ): int {
 	$GLOBALS['wpdb']->set_prefix( $GLOBALS['table_prefix'] );
 
 	$winners = 0;
+	$tokens  = array();
 	foreach ( $pids as $pid ) {
 		pcntl_waitpid( $pid, $status );
-		$code = pcntl_wexitstatus( $status );
-		if ( 2 === $code ) {
-			fwrite( STDERR, "a child errored\n" );
+		// A child killed by a signal or dying with a fatal must never count as a winner or a loser.
+		if ( ! pcntl_wifexited( $status ) || ! in_array( pcntl_wexitstatus( $status ), array( 0, 1 ), true ) ) {
+			fwrite( STDERR, "a child exited abnormally\n" );
 			exit( 1 );
 		}
-		$winners += 0 === $code ? 1 : 0;
+		if ( 0 === pcntl_wexitstatus( $status ) ) {
+			++$winners;
+			$file     = sys_get_temp_dir() . '/agentporter-race-' . $pid;
+			$tokens[] = (string) @file_get_contents( $file );
+			@unlink( $file );
+		}
+	}
+	if ( 1 === $winners ) {
+		global $wpdb;
+		$stored = (string) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'agentporter_lock_' . $name ) );
+		if ( $stored !== $tokens[0] ) {
+			fwrite( STDERR, "stored lock does not belong to the winner\n" );
+			exit( 1 );
+		}
 	}
 	return $winners;
 }

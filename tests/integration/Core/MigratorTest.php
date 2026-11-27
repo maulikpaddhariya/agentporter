@@ -263,7 +263,9 @@ final class MigratorTest extends \WP_UnitTestCase {
 		};
 		add_filter( 'query', $spy );
 		$this->assertSame( Migrator::RESULT_UP_TO_DATE, $this->migrator()->migrate() );
+		add_filter( 'wp_doing_cron', '__return_true' );
 		$this->subsystem()->on_init();
+		remove_filter( 'wp_doing_cron', '__return_true' );
 		remove_filter( 'query', $spy );
 		$this->assertSame( array(), $queries, 'Reviewer repro: an up-to-date check must not reload all options.' );
 		$this->assertSame( $alloptions, wp_cache_get( 'alloptions', 'options' ) );
@@ -405,5 +407,33 @@ final class MigratorTest extends \WP_UnitTestCase {
 		switch_to_blog( $blog_id );
 		$this->assertSame( Schema::VERSION, $this->migrator()->installed_version() );
 		restore_current_blog();
+	}
+
+	public function test_forced_migration_recreates_tables_dropped_externally(): void {
+		global $wpdb;
+		$this->migrator()->migrate();
+		$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $wpdb->prefix . Schema::AUDIT ) );
+		$this->assertSame( Migrator::RESULT_UP_TO_DATE, $this->migrator()->migrate(), 'Cheap path trusts the version.' );
+		$this->assertSame( Migrator::RESULT_MIGRATED, $this->migrator()->migrate( true ), 'Forced path verifies tables.' );
+		$this->assertSame( array(), $this->migrator()->missing_tables() );
+	}
+
+	public function test_stale_lower_cache_heals_after_one_locked_check(): void {
+		$this->migrator()->migrate();
+		$alloptions                     = wp_load_alloptions();
+		$alloptions[ Migrator::OPTION ] = '0';
+		wp_cache_set( 'alloptions', $alloptions, 'options' );
+		$this->migrator()->migrate();
+		$writes = 0;
+		$spy    = static function ( $query ) use ( &$writes ) {
+			if ( preg_match( '/^\s*(INSERT|UPDATE|DELETE)/i', $query ) ) {
+				++$writes;
+			}
+			return $query;
+		};
+		add_filter( 'query', $spy );
+		$this->migrator()->migrate();
+		remove_filter( 'query', $spy );
+		$this->assertSame( 0, $writes, 'Reviewer repro: no repeated lock writes once healed.' );
 	}
 }

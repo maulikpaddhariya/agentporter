@@ -204,14 +204,17 @@ final class Lock {
 	}
 
 	/**
-	 * Whether a stored lock value is stale: expired, malformed, or stamped further ahead than one TTL.
+	 * Whether a stored lock value is stale: expired, malformed, or stamped implausibly far ahead
+	 * (more than one TTL plus a grace period of max(300 s, TTL), so ordinary clock drift between
+	 * web nodes never lets one node steal another's live lock).
 	 *
 	 * @param string $value Stored value.
 	 * @param int    $now   Current Unix time.
 	 */
 	private function is_stale( string $value, int $now ): bool {
 		$expires = $this->expires_at( $value );
-		return $expires <= $now || $expires > $now + $this->ttl;
+		$grace   = max( 300, $this->ttl );
+		return $expires <= $now || $expires > $now + $this->ttl + $grace;
 	}
 
 	/**
@@ -228,7 +231,7 @@ final class Lock {
 	 * Keeps the options cache consistent after direct writes.
 	 */
 	private function flush_option_cache(): void {
+		// Only our own key; never the shared notoptions/alloptions entries (the lock is never read via get_option()).
 		wp_cache_delete( $this->option, 'options' );
-		wp_cache_delete( 'notoptions', 'options' );
 	}
 }

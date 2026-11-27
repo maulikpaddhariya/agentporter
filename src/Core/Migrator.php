@@ -110,7 +110,9 @@ final class Migrator {
 	 *                    not advanced and a back-off is recorded.
 	 */
 	public function migrate( bool $force = false ): string {
-		if ( ! $this->needs_migration() ) {
+		// Forced runs (activation, CLI, network upgrade, new site) always verify under the lock, so
+		// tables dropped by a cleanup plugin or a restore are recreated even when the version says "current".
+		if ( ! $force && ! $this->needs_migration() ) {
 			return self::RESULT_UP_TO_DATE;
 		}
 		if ( ! $force && (int) get_option( self::RETRY_OPTION, 0 ) > time() ) {
@@ -132,8 +134,17 @@ final class Migrator {
 				update_option( self::OPTION, (string) $version, true );
 				$ran = true;
 			}
+			if ( ! $ran && $force && array() !== $this->missing_tables() ) {
+				$this->keep_lease();
+				$this->create_tables();
+				$ran = true;
+			}
 			if ( $ran ) {
 				delete_option( self::RETRY_OPTION );
+			} elseif ( $this->installed_version() < $installed ) {
+				// The cache is stale below the database: repair it once instead of retrying every request.
+				wp_cache_delete( self::OPTION, 'options' );
+				wp_cache_delete( 'alloptions', 'options' );
 			}
 			return $ran ? self::RESULT_MIGRATED : self::RESULT_UP_TO_DATE;
 		} catch ( \Throwable $error ) {
@@ -177,6 +188,21 @@ final class Migrator {
 				throw new \RuntimeException( 'AgentPorter could not create one of its database tables.' );
 			}
 		}
+	}
+
+	/**
+	 * Tables from the current schema that do not exist.
+	 *
+	 * @return list<string>
+	 */
+	public function missing_tables(): array {
+		$missing = array();
+		foreach ( array_keys( $this->schema->create_statements() ) as $table ) {
+			if ( ! $this->table_exists( $table ) ) {
+				$missing[] = $table;
+			}
+		}
+		return $missing;
 	}
 
 	/**

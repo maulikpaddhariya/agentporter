@@ -122,4 +122,11 @@ final class LockTest extends \WP_UnitTestCase {
 			$wpdb->options = $original;
 		}
 	}
+
+	public function test_one_second_clock_skew_between_nodes_cannot_steal_a_live_lock(): void {
+		$fast = $this->lock( 600 );
+		$this->assertTrue( $fast->acquire( 1000001 ) );
+		$this->assertFalse( $this->lock( 600 )->acquire( 1000000 ), 'Reviewer repro: slower node must not take over.' );
+		$this->assertTrue( $fast->renew( 1000002 ) );
+	}
 }
