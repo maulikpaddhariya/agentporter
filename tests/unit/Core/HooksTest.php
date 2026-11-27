@@ -10,7 +10,11 @@ namespace AgentPorter\Tests\Unit\Core;
 use AgentPorter\Core\Faults;
 use AgentPorter\Core\Hooks;
 use AgentPorter\Core\Logger;
+use AgentPorter\Tests\Unit\Fixtures\DenyDecision;
 use AgentPorter\Tests\Unit\TestCase;
+
+require_once dirname( __DIR__ ) . '/Fixtures/Subsystems.php';
+require_once dirname( __DIR__ ) . '/Fixtures/WPDieException.php';
 
 /**
  * @covers \AgentPorter\Core\Hooks
@@ -114,5 +118,115 @@ final class HooksTest extends TestCase {
 		$hooks->add_filter( 'the_title', 'strtoupper', 7, 2 );
 		$hooks->add_action( 'init', 'time', 3, 0 );
 		$this->addToAssertionCount( 2 );
+	}
+
+	public function test_guard_filter_returns_deny_value_when_subsystem_disabled_by_other_hook(): void {
+		$hooks = new Hooks( 'guard', $this->faults );
+		$allow = $hooks->wrap_guard_filter( static fn() => true, false );
+		$other = $hooks->wrap_action(
+			static function () {
+				throw new \RuntimeException( 'unrelated' );
+			}
+		);
+		$this->assertTrue( $allow( null ) );
+		$other();
+		$this->assertFalse( $allow( null ), 'Once disabled, the guard must deny, not pass its input through.' );
+	}
+
+	public function test_guard_filter_returns_deny_value_when_callback_throws(): void {
+		$deny = ( new Hooks( 'guard', $this->faults ) )->wrap_guard_filter(
+			static function () {
+				throw new \RuntimeException( 'x' );
+			},
+			'denied'
+		);
+		$this->assertSame( 'denied', $deny( 'allowed' ) );
+		$this->assertTrue( $this->faults->is_disabled( 'guard' ) );
+	}
+
+	public function test_guard_filter_deny_closure_builds_a_fresh_value_from_hook_args(): void {
+		$this->faults->disable( 'guard', new \RuntimeException( 'x' ) );
+		$wrapped = ( new Hooks( 'guard', $this->faults ) )->wrap_guard_filter(
+			static fn() => 'allow',
+			static fn( $value, $extra ) => array( 'denied', $extra )
+		);
+		$first   = $wrapped( null, 'a' );
+		$second  = $wrapped( null, 'b' );
+		$this->assertSame( array( 'denied', 'a' ), $first );
+		$this->assertSame( array( 'denied', 'b' ), $second );
+	}
+
+	public function test_guard_action_runs_deny_handler_when_subsystem_disabled(): void {
+		$ran    = 0;
+		$denied = 0;
+		$this->faults->disable( 'guard', new \RuntimeException( 'x' ) );
+		( new Hooks( 'guard', $this->faults ) )->wrap_guard_action(
+			static function () use ( &$ran ) {
+				++$ran;
+			},
+			static function () use ( &$denied ) {
+				++$denied;
+			}
+		)();
+		$this->assertSame( array( 0, 1 ), array( $ran, $denied ) );
+	}
+
+	public function test_guard_action_runs_deny_handler_when_callback_throws(): void {
+		$denied = 0;
+		( new Hooks( 'guard', $this->faults ) )->wrap_guard_action(
+			static function () {
+				throw new \RuntimeException( 'x' );
+			},
+			static function () use ( &$denied ) {
+				++$denied;
+			}
+		)();
+		$this->assertSame( 1, $denied );
+	}
+
+	public function test_hooks_stop_when_a_dependency_is_disabled(): void {
+		$hooks = new Hooks( 'serve', $this->faults, array( 'guard' ) );
+		$safe  = $hooks->wrap_filter( static fn( $v ) => $v . '-changed' );
+		$guard = $hooks->wrap_guard_filter( static fn() => true, false );
+		$this->assertSame( 'v-changed', $safe( 'v' ) );
+		$this->faults->disable( 'guard', new \RuntimeException( 'x' ) );
+		$this->assertSame( 'v', $safe( 'v' ) );
+		$this->assertFalse( $guard( null ) );
+		$this->assertFalse( $this->faults->is_disabled( 'serve' ) );
+	}
+
+	public function test_control_flow_exceptions_are_rethrown_without_disabling(): void {
+		$hooks = new Hooks( 'policy', $this->faults );
+		foreach ( array( new DenyDecision( 'no' ), new \WPDieException( 'die' ) ) as $decision ) {
+			foreach ( array( 'wrap_filter', 'wrap_action' ) as $method ) {
+				try {
+					$hooks->{$method}(
+						static function () use ( $decision ) {
+							throw $decision;
+						}
+					)( 'v' );
+					$this->fail( 'Expected the decision to propagate.' );
+				} catch ( \Throwable $caught ) {
+					$this->assertSame( $decision, $caught );
+				}
+			}
+			try {
+				$hooks->wrap_guard_filter(
+					static function () use ( $decision ) {
+						throw $decision;
+					},
+					false
+				)( true );
+				$this->fail( 'Expected the decision to propagate.' );
+			} catch ( \Throwable $caught ) {
+				$this->assertSame( $decision, $caught );
+			}
+		}
+		$this->assertFalse( $this->faults->is_disabled( 'policy' ) );
+	}
+
+	public function test_unknown_exceptions_are_not_decisions(): void {
+		$this->assertFalse( Hooks::is_decision( new \RuntimeException( 'x' ) ) );
+		$this->assertTrue( Hooks::is_decision( new DenyDecision( 'x' ) ) );
 	}
 }

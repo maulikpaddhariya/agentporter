@@ -50,7 +50,7 @@ final class FaultNotice {
 			esc_html(
 				sprintf(
 					/* translators: %s: comma-separated list of module ids. */
-					__( 'AgentPorter switched off part of itself after an error (modules: %s). Everything else keeps working. Turn on WP_DEBUG_LOG to see the details.', 'agentporter' ),
+					__( 'AgentPorter switched off part of itself after an error (modules: %s). Everything else keeps working, and agent access stays closed if a security module is affected. If this keeps happening, update AgentPorter or contact support.', 'agentporter' ),
 					implode( ', ', array_keys( $disabled ) )
 				)
 			)

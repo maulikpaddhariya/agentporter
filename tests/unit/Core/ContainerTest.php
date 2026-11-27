@@ -80,4 +80,24 @@ final class ContainerTest extends TestCase {
 		$this->assertSame( $container->get( \ArrayObject::class ), $container->get( \ArrayObject::class ) );
 		$this->assertSame( 1, $builds );
 	}
+
+	public function test_sealed_container_refuses_registrations(): void {
+		$container = new Container();
+		$container->set( \ArrayObject::class, static fn() => new \ArrayObject() );
+		$container->seal();
+		$this->assertInstanceOf( \ArrayObject::class, $container->get( \ArrayObject::class ) );
+		$this->expectException( ContainerException::class );
+		$container->set( \SplStack::class, static fn() => new \SplStack() );
+	}
+
+	public function test_rollback_removes_services_added_after_snapshot(): void {
+		$container = new Container();
+		$container->set( \ArrayObject::class, static fn() => new \ArrayObject() );
+		$snapshot = $container->ids();
+		$container->set( \SplStack::class, static fn() => new \SplStack() );
+		$container->get( \SplStack::class );
+		$container->rollback( $snapshot );
+		$this->assertTrue( $container->has( \ArrayObject::class ) );
+		$this->assertFalse( $container->has( \SplStack::class ) );
+	}
 }

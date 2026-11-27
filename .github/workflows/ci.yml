@@ -34,21 +34,27 @@ jobs:
       - run: bin/lint-syntax.sh
 
   legacy-parse:
-    name: Requirements notice parses on PHP 7.2
+    name: Requirements notice on PHP ${{ matrix.php }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.2', '8.0']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
-          php-version: '7.2'
+          php-version: ${{ matrix.php }}
           coverage: none
           tools: none
-      # These two files run before the version check, so an outdated host must be able to parse them
-      # to show the "requirements not met" notice instead of a fatal error.
-      - run: php -l agentporter.php && php -l src/Core/Requirements.php
+      # These files run before the version check, so an outdated host must be able to parse and run
+      # them to show the "requirements not met" notice instead of a fatal error.
+      - run: php -l agentporter.php && php -l src/Core/Requirements.php && php -l tests/legacy/load-on-old-php.php
+      - name: Load the plugin on unsupported PHP
+        run: php tests/legacy/load-on-old-php.php
 
   phpcs:
     name: PHPCS (WPCS + VIP + PHPCompatibilityWP)
@@ -68,6 +74,8 @@ jobs:
       - run: composer install --no-interaction --no-progress
       - name: PHPCS
         run: vendor/bin/phpcs -q --report-full --report-checkstyle=./phpcs-report.xml
+      - name: Pre-boot files are PHP 7.2-compatible (functions too, not only syntax)
+        run: vendor/bin/phpcs -q --no-cache --standard=PHPCompatibilityWP --runtime-set testVersion 7.2- agentporter.php src/Core/Requirements.php tests/legacy/load-on-old-php.php
       - name: Annotate PR
         if: ${{ always() && hashFiles('phpcs-report.xml') != '' }}
         run: cs2pr ./phpcs-report.xml --graceful-warnings

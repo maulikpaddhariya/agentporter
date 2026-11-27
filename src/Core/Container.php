@@ -41,17 +41,59 @@ final class Container {
 	private array $building = array();
 
 	/**
+	 * Whether new registrations are refused (set after boot).
+	 *
+	 * @var bool
+	 */
+	private bool $sealed = false;
+
+	/**
 	 * Registers a factory.
 	 *
 	 * @param string                     $id      Service id.
 	 * @param callable(Container):object $factory Factory receiving the container.
-	 * @throws ContainerException When the id is already registered or built.
+	 * @throws ContainerException When the container is sealed or the id is already registered.
 	 */
 	public function set( string $id, callable $factory ): void {
+		if ( $this->sealed ) {
+			throw new ContainerException( 'The container is sealed; services can only be registered during boot.' );
+		}
 		if ( isset( $this->factories[ $id ] ) || isset( $this->instances[ $id ] ) ) {
 			throw new ContainerException( sprintf( 'Service "%s" is already registered.', $id ) ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Internal message, never rendered as HTML.
 		}
 		$this->factories[ $id ] = $factory;
+	}
+
+	/**
+	 * Refuses any further registrations. Called once boot finishes.
+	 */
+	public function seal(): void {
+		$this->sealed = true;
+	}
+
+	/**
+	 * Registered ids, in registration order (used to roll back a failed subsystem).
+	 *
+	 * @return list<string>
+	 */
+	public function ids(): array {
+		return array_keys( $this->factories + $this->instances );
+	}
+
+	/**
+	 * Removes every service registered after the given snapshot of ids.
+	 *
+	 * @param array $snapshot Result of ids() taken earlier.
+	 *
+	 * @phpstan-param list<string> $snapshot
+	 */
+	public function rollback( array $snapshot ): void {
+		$keep = array_flip( $snapshot );
+		foreach ( $this->ids() as $id ) {
+			if ( ! isset( $keep[ $id ] ) ) {
+				unset( $this->factories[ $id ], $this->instances[ $id ] );
+			}
+		}
 	}
 
 	/**

@@ -10,10 +10,12 @@ declare(strict_types=1);
 namespace AgentPorter;
 
 use AgentPorter\Core\Container;
+use AgentPorter\Core\DependsOn;
 use AgentPorter\Core\Faults;
 use AgentPorter\Core\FaultNotice;
 use AgentPorter\Core\Hooks;
 use AgentPorter\Core\Logger;
+use AgentPorter\Core\SecurityCritical;
 use AgentPorter\Core\Subsystem;
 
 defined( 'ABSPATH' ) || exit;
@@ -21,9 +23,12 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Builds the core services and boots each subsystem inside its own failure boundary.
  *
- * This is the only singleton in the plugin (ARCHITECTURE.md §10.3).
+ * This is the only singleton in the plugin (ARCHITECTURE.md §10.3). The subsystem list is fixed in
+ * code and the container is sealed after boot, so other plugins cannot add or replace services.
  */
 final class Plugin {
+
+	private const ID_PATTERN = '/^[a-z][a-z0-9_-]{1,39}$/';
 
 	/**
 	 * Shared instance.
@@ -70,6 +75,7 @@ final class Plugin {
 	public static function instance(): self {
 		if ( null === self::$instance ) {
 			$container = new Container();
+			$container->set( \wpdb::class, static fn(): \wpdb => $GLOBALS['wpdb'] );
 			$container->set( Logger::class, static fn(): Logger => new Logger() );
 			$container->set( Faults::class, static fn( Container $c ): Faults => new Faults( $c->get( Logger::class ) ) );
 			self::$instance = new self( $container, $container->get( Faults::class ), self::default_subsystems() );
@@ -98,29 +104,69 @@ final class Plugin {
 
 		( new FaultNotice( $this->faults ) )->register();
 
-		$seen = array();
-		foreach ( $this->subsystems as $class ) {
-			// Until a subsystem proves a valid, unique id, failures are recorded under an id derived
-			// from its class name, so a bad subsystem can never disable another one by claiming its id.
-			$fault_id = $this->boundary_id( $class );
-			try {
-				$subsystem   = $this->instantiate( $class, $seen );
-				$id          = $subsystem->id();
-				$seen[ $id ] = true;
-				$fault_id    = $id;
-				$subsystem->register( $this->container, new Hooks( $id, $this->faults ) );
-				$this->booted_subsystems[] = $id;
-			} catch ( \Throwable $error ) {
-				$this->faults->disable( $fault_id, $error );
-			}
+		foreach ( $this->subsystems as $class_name ) {
+			$this->boot_one( $class_name );
 		}
 
-		/**
-		 * Fires after AgentPorter booted its subsystems.
-		 *
-		 * @param Plugin $plugin The plugin.
-		 */
-		do_action( 'agentporter_booted', $this );
+		$this->container->seal();
+
+		try {
+			/**
+			 * Fires after AgentPorter booted its subsystems.
+			 *
+			 * @param array{booted: list<string>, disabled: list<string>, locked_down: bool} $status Read-only boot status.
+			 */
+			do_action(
+				'agentporter_booted',
+				array(
+					'booted'      => $this->booted_subsystems,
+					'disabled'    => array_keys( $this->faults->disabled() ),
+					'locked_down' => $this->faults->is_locked_down(),
+				)
+			);
+		} catch ( \Throwable $error ) {
+			// A third-party listener must never take the site down.
+			unset( $error );
+		}
+	}
+
+	/**
+	 * Boots one subsystem inside its failure boundary. Never throws: every failure is recorded.
+	 *
+	 * @param string $class_name Subsystem class.
+	 * @throws \LogicException Internally for a missing dependency; always caught here.
+	 */
+	private function boot_one( string $class_name ): void {
+		// Until a subsystem proves a valid, unique id, failures are recorded under "class:<name>", which
+		// the id pattern can never match, so a bad subsystem cannot disable another by claiming its id.
+		$fault_id = 'class:' . $class_name;
+		$critical = is_subclass_of( $class_name, SecurityCritical::class );
+		$snapshot = $this->container->ids();
+
+		try {
+			[ $subsystem, $id ] = $this->instantiate( $class_name );
+			$fault_id           = $id;
+			if ( $critical ) {
+				$this->faults->mark_critical( $id );
+			}
+
+			$dependencies = $subsystem instanceof DependsOn ? $subsystem->depends_on() : array();
+			foreach ( $dependencies as $dependency ) {
+				if ( ! in_array( $dependency, $this->booted_subsystems, true ) || $this->faults->is_disabled( $dependency ) ) {
+					throw new \LogicException( 'A required subsystem is not available.' );
+				}
+			}
+
+			$subsystem->register( $this->container, new Hooks( $id, $this->faults, array_values( $dependencies ) ) );
+			$this->booted_subsystems[] = $id;
+		} catch ( \Throwable $error ) {
+			// Drop services the failed subsystem registered so nothing else can resolve half-built state.
+			$this->container->rollback( $snapshot );
+			if ( $critical ) {
+				$this->faults->lock_down();
+			}
+			$this->faults->disable( $fault_id, $error );
+		}
 	}
 
 	/**
@@ -154,32 +200,21 @@ final class Plugin {
 	}
 
 	/**
-	 * Instantiates and validates a subsystem.
+	 * Instantiates and validates a subsystem; reads its id exactly once.
 	 *
-	 * @param string              $class_name Subsystem class.
-	 * @param array<string, bool> $seen       Ids already booted.
-	 * @return Subsystem
+	 * @param string $class_name Subsystem class.
+	 * @return array{0: Subsystem, 1: string}
 	 * @throws \LogicException When the class is not a subsystem or its id is invalid or taken.
 	 */
-	private function instantiate( string $class_name, array $seen ): Subsystem {
+	private function instantiate( string $class_name ): array {
 		$subsystem = new $class_name();
 		if ( ! $subsystem instanceof Subsystem ) {
 			throw new \LogicException( 'Not a subsystem.' );
 		}
 		$id = $subsystem->id();
-		if ( 1 !== preg_match( '/^[a-z][a-z0-9_-]{1,39}$/', $id ) || isset( $seen[ $id ] ) ) {
+		if ( 1 !== preg_match( self::ID_PATTERN, $id ) || in_array( $id, $this->booted_subsystems, true ) || $this->faults->is_disabled( $id ) ) {
 			throw new \LogicException( 'Invalid or duplicate subsystem id.' );
 		}
-		return $subsystem;
-	}
-
-	/**
-	 * Id used for a subsystem that failed before reporting its own id.
-	 *
-	 * @param string $class_name Subsystem class.
-	 */
-	private function boundary_id( string $class_name ): string {
-		$short = substr( (string) strrchr( '\\' . $class_name, '\\' ), 1 );
-		return strtolower( (string) preg_replace( '/[^A-Za-z0-9]+/', '-', $short ) );
+		return array( $subsystem, $id );
 	}
 }

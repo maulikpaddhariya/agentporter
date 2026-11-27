@@ -49,7 +49,7 @@ final class Logger {
 		}
 		$line = 'AgentPorter: ' . preg_replace( '/[\r\n]+/', ' ', $message );
 		if ( strlen( $line ) > self::MAX_LENGTH ) {
-			$line = substr( $line, 0, self::MAX_LENGTH ) . '…';
+			$line = ( function_exists( 'mb_strcut' ) ? mb_strcut( $line, 0, self::MAX_LENGTH, 'UTF-8' ) : substr( $line, 0, self::MAX_LENGTH ) ) . '…';
 		}
 		error_log( $line ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- The plugin's single debug sink; only active with WP_DEBUG + WP_DEBUG_LOG.
 	}

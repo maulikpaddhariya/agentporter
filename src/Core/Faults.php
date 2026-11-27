@@ -12,8 +12,11 @@ namespace AgentPorter\Core;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Failure boundary state. A disabled subsystem's wrapped hooks become no-ops for the rest of the
- * request; other subsystems keep running.
+ * Failure boundary state. A disabled subsystem's wrapped hooks stop running for the rest of the
+ * request (safe hooks pass through, guard hooks deny); other subsystems keep running.
+ *
+ * Lockdown: when a security-critical subsystem fails, {@see is_locked_down()} is true for the rest
+ * of the request and every agent-facing path must deny.
  */
 final class Faults {
 
@@ -25,11 +28,51 @@ final class Faults {
 	private array $disabled = array();
 
 	/**
+	 * Ids of security-critical subsystems.
+	 *
+	 * @var array<string, true>
+	 */
+	private array $critical = array();
+
+	/**
+	 * Whether agent access is locked down.
+	 *
+	 * @var bool
+	 */
+	private bool $locked_down = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Logger $logger Debug logger.
 	 */
 	public function __construct( private Logger $logger ) {
+	}
+
+	/**
+	 * Marks a subsystem id as security-critical (its failure triggers lockdown).
+	 *
+	 * @param string $subsystem Subsystem id.
+	 */
+	public function mark_critical( string $subsystem ): void {
+		$this->critical[ $subsystem ] = true;
+		if ( isset( $this->disabled[ $subsystem ] ) ) {
+			$this->locked_down = true;
+		}
+	}
+
+	/**
+	 * Enters lockdown directly (for example when a critical subsystem failed before reporting its id).
+	 */
+	public function lock_down(): void {
+		$this->locked_down = true;
+	}
+
+	/**
+	 * Whether agent access must be denied because a security-critical subsystem failed.
+	 */
+	public function is_locked_down(): bool {
+		return $this->locked_down;
 	}
 
 	/**
@@ -39,19 +82,23 @@ final class Faults {
 	 * @param \Throwable $error     What was thrown.
 	 */
 	public function disable( string $subsystem, \Throwable $error ): void {
+		if ( isset( $this->critical[ $subsystem ] ) ) {
+			$this->locked_down = true;
+		}
 		if ( isset( $this->disabled[ $subsystem ] ) ) {
 			return;
 		}
 		$this->disabled[ $subsystem ] = get_class( $error );
 
+		// Never log the exception message (it may carry tokens, emails or request data) or absolute paths.
 		$this->logger->error(
 			sprintf(
-				'subsystem "%s" disabled for this request: %s: %s at %s:%d',
+				'subsystem "%s" disabled for this request: %s at %s:%d%s',
 				$subsystem,
 				get_class( $error ),
-				$error->getMessage(),
-				$error->getFile(),
-				$error->getLine()
+				self::relative_path( $error->getFile() ),
+				$error->getLine(),
+				$this->locked_down ? ' (agent access locked down)' : ''
 			)
 		);
 
@@ -84,5 +131,24 @@ final class Faults {
 	 */
 	public function disabled(): array {
 		return $this->disabled;
+	}
+
+	/**
+	 * Path relative to the plugin (or WordPress) root; just the file name for anything else.
+	 *
+	 * @param string $file Absolute path.
+	 */
+	public static function relative_path( string $file ): string {
+		$roots = array();
+		if ( defined( 'AGENTPORTER_DIR' ) ) {
+			$roots[] = (string) AGENTPORTER_DIR;
+		}
+		$roots[] = ABSPATH;
+		foreach ( $roots as $root ) {
+			if ( '' !== $root && str_starts_with( $file, $root ) ) {
+				return substr( $file, strlen( $root ) );
+			}
+		}
+		return basename( $file );
 	}
 }

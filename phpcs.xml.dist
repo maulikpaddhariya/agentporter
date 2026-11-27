@@ -82,6 +82,9 @@
 	Justification: VIP file-system rules target code running on a VIP web node. Tests and bin/ scripts
 	run only in CI or on a developer machine and write to STDERR or temp files. Excluded from releases by .distignore and .gitattributes export-ignore.
 	-->
+	<rule ref="WordPressVIPMinimum.Performance.FetchingRemoteData">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
 	<rule ref="WordPressVIPMinimum.Functions.RestrictedFunctions">
 		<exclude-pattern>/tests/*</exclude-pattern>
 		<exclude-pattern>/bin/*</exclude-pattern>
