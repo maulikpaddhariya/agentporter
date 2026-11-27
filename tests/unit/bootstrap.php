@@ -18,3 +18,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- WordPress core constant required by plugin files.
 	define( 'ABSPATH', sys_get_temp_dir() . '/agentporter-unit-wp/' );
 }
+// Time constants from wp-includes/default-constants.php.
+foreach ( array(
+	'MINUTE_IN_SECONDS' => 60,
+	'HOUR_IN_SECONDS'   => 3600,
+	'DAY_IN_SECONDS'    => 86400,
+) as $agentporter_name => $agentporter_value ) {
+	if ( ! defined( $agentporter_name ) ) {
+		define( $agentporter_name, $agentporter_value ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.VariableConstantNameFound -- WordPress core constants.
+	}
+}
+unset( $agentporter_name, $agentporter_value );

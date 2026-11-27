@@ -96,6 +96,7 @@ final class Plugin {
 	public static function default_subsystems(): array {
 		return array(
 			Core\MigrationSubsystem::class,
+			Security\SecuritySubsystem::class,
 		);
 	}
 
@@ -106,7 +107,9 @@ final class Plugin {
 	 * @return list<class-string<Subsystem>>
 	 */
 	public static function critical_subsystems(): array {
-		return array();
+		return array(
+			Security\SecuritySubsystem::class,
+		);
 	}
 
 	/**

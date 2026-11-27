@@ -42,5 +42,19 @@ final class Activator {
 			// Activation still succeeds; the next admin request retries and the fault notice explains.
 			$plugin->faults()->disable( 'migrations', $error );
 		}
+		\AgentPorter\Security\Maintenance::ensure_scheduled();
+	}
+
+	/**
+	 * Deactivation callback: removes scheduled events (on every site when network-deactivated).
+	 *
+	 * @param bool $network_wide Whether the plugin is being network-deactivated.
+	 */
+	public static function deactivate( $network_wide = false ): void {
+		if ( is_multisite() && true === $network_wide ) {
+			\AgentPorter\Security\Maintenance::unschedule_network();
+			return;
+		}
+		\AgentPorter\Security\Maintenance::unschedule();
 	}
 }

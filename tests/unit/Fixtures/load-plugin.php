@@ -30,6 +30,9 @@ function do_action( $hook, ...$args ) {
 function register_activation_hook( $file, $callback ) {
 	$GLOBALS['agentporter_hooks'][] = 'activation';
 }
+function register_deactivation_hook( $file, $callback ) {
+	$GLOBALS['agentporter_hooks'][] = 'deactivation';
+}
 function __( $text, $domain = 'default' ) {
 	return $text;
 }
