@@ -235,4 +235,25 @@ final class PluginTest extends TestCase {
 			}
 		}
 	}
+
+	public function test_dependency_registration_is_merge_only(): void {
+		$plugin = $this->plugin( array( Fixtures\KeysSubsystem::class, Fixtures\CriticalDependentGuardSubsystem::class ) );
+		$plugin->boot();
+		$plugin->faults()->register_dependencies( 'agentguard', array() ); // A third party tries to cut the edge.
+		$plugin->faults()->disable( 'keys', new \RuntimeException( 'x' ) );
+		$this->assertTrue( $plugin->faults()->is_locked_down() );
+	}
+
+	public function test_transitive_cascade_and_non_dependents_untouched(): void {
+		$faults = new Faults( new Logger( false ) );
+		$faults->register_dependencies( 'b', array( 'a' ) );
+		$faults->register_dependencies( 'c', array( 'b' ) );
+		$faults->register_dependencies( 'd', array( 'x' ) );
+		$faults->register_dependencies( 'a', array( 'c' ) ); // Cycle must terminate.
+		$faults->mark_critical( 'c' );
+		$faults->disable( 'a', new \RuntimeException( 'x' ) );
+		$this->assertTrue( $faults->is_disabled( 'c' ) );
+		$this->assertTrue( $faults->is_locked_down() );
+		$this->assertFalse( $faults->is_disabled( 'd' ) );
+	}
 }

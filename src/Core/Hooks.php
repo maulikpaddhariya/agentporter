@@ -46,14 +46,15 @@ final class Hooks {
 	/**
 	 * Classes too broad to be "decisions": opting them in would hide every bug.
 	 */
-	private const TOO_BROAD = array( 'throwable', 'exception', 'error', 'runtimeexception', 'logicexception', 'errorexception', 'typeerror' );
+	private const TOO_BROAD = array( 'throwable', 'stringable', 'exception', 'error', 'runtimeexception', 'logicexception', 'errorexception', 'typeerror' );
 
 	/**
-	 * Whether guard hooks of this registrar also deny while agent access is locked down.
+	 * Whether guard hooks of this registrar also deny while agent access is locked down. On by
+	 * default (fail closed); only the front-end request gate opts out with for_front_end().
 	 *
 	 * @var bool
 	 */
-	private bool $agent_facing = false;
+	private bool $agent_facing = true;
 
 	/**
 	 * Extra decision exception classes for this registrar.
@@ -91,8 +92,10 @@ final class Hooks {
 	 */
 	public function with_decisions( array $class_names ): self {
 		foreach ( $class_names as $class_name ) {
-			$name = strtolower( ltrim( $class_name, '\\' ) );
-			if ( in_array( $name, self::TOO_BROAD, true ) || ( class_exists( $class_name, false ) && ( new \ReflectionClass( $class_name ) )->isInternal() ) ) {
+			$name         = strtolower( ltrim( $class_name, '\\' ) );
+			$is_interface = interface_exists( $class_name, false );
+			$is_internal  = class_exists( $class_name, false ) && ( new \ReflectionClass( $class_name ) )->isInternal();
+			if ( in_array( $name, self::TOO_BROAD, true ) || $is_interface || $is_internal ) {
 				throw new \InvalidArgumentException( 'Only specific, non-built-in exception classes can be decisions.' );
 			}
 		}
@@ -102,15 +105,15 @@ final class Hooks {
 	}
 
 	/**
-	 * Returns a registrar whose guard hooks also deny while agent access is locked down (a
-	 * security-critical subsystem failed). Use it for agent-facing allow/deny decisions; do not use it
-	 * for the front-end request gate, which must fail open to serving the page.
+	 * Returns a registrar whose guard hooks ignore lockdown (they still deny when their own subsystem
+	 * or a dependency fails). Only for the front-end request gate, which must fail open to serving
+	 * the page (SECURITY-MODEL E1). Every other guard denies under lockdown.
 	 *
 	 * @return self
 	 */
-	public function for_agents(): self {
+	public function for_front_end(): self {
 		$clone               = clone $this;
-		$clone->agent_facing = true;
+		$clone->agent_facing = false;
 		return $clone;
 	}
 

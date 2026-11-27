@@ -190,6 +190,10 @@ final class Plugin {
 			}
 
 			$subsystem->register( $this->container, new Hooks( $id, $this->faults, $dependencies ) );
+			if ( $this->faults->is_disabled( $id ) ) {
+				// A dependency failed while this subsystem was registering (cascade): treat as failed.
+				throw new \LogicException( 'Disabled during registration.' );
+			}
 			$this->booted_subsystems[] = $id;
 		} catch ( \Throwable $error ) {
 			// Record the failure first: nothing below may prevent lockdown or the disable.

@@ -91,7 +91,9 @@ final class Faults {
 	 * @phpstan-param list<string> $dependencies
 	 */
 	public function register_dependencies( string $subsystem, array $dependencies ): void {
-		$this->dependencies[ $subsystem ] = array_values( $dependencies );
+		// Write-once and merge-only: dependencies can be added, never removed, so the cascade cannot be weakened.
+		$known                            = $this->dependencies[ $subsystem ] ?? array();
+		$this->dependencies[ $subsystem ] = array_values( array_unique( array_merge( $known, $dependencies ) ) );
 	}
 
 	/**

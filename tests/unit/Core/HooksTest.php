@@ -302,7 +302,7 @@ final class HooksTest extends TestCase {
 	}
 
 	public function test_broad_exception_classes_cannot_be_decisions(): void {
-		foreach ( array( 'Throwable', '\\Exception', 'Error', 'RuntimeException', 'TypeError', 'InvalidArgumentException' ) as $class ) {
+		foreach ( array( 'Throwable', '\\Throwable', 'Stringable', '\\Exception', 'Error', 'RuntimeException', 'TypeError', 'InvalidArgumentException' ) as $class ) {
 			try {
 				( new Hooks( 'guard', $this->faults ) )->with_decisions( array( $class ) );
 				$this->fail( 'Expected rejection of ' . $class );
@@ -312,10 +312,27 @@ final class HooksTest extends TestCase {
 		}
 	}
 
-	public function test_agent_facing_guards_deny_under_lockdown_but_gate_guards_do_not(): void {
+	public function test_guards_deny_under_lockdown_by_default_and_only_the_gate_opts_out(): void {
 		$this->faults->lock_down();
 		$hooks = new Hooks( 'serve', $this->faults );
-		$this->assertFalse( $hooks->for_agents()->wrap_guard_filter( static fn() => true, false )( null ) );
-		$this->assertTrue( $hooks->wrap_guard_filter( static fn() => true, false )( null ), 'The front-end gate must keep serving pages.' );
+		$this->assertFalse( $hooks->wrap_guard_filter( static fn() => true, false )( null ), 'Fail closed by default.' );
+		$this->assertTrue( $hooks->for_front_end()->wrap_guard_filter( static fn() => true, false )( null ), 'The front-end gate keeps serving pages.' );
+		$denied = 0;
+		$hooks->wrap_guard_action(
+			static function () {},
+			static function () use ( &$denied ) {
+				++$denied;
+			}
+		)();
+		$this->assertSame( 1, $denied );
+	}
+
+	public function test_registrar_options_survive_chaining_in_any_order(): void {
+		$this->faults->lock_down();
+		$a = ( new Hooks( 'x', $this->faults ) )->for_front_end()->with_decisions( array( 'MyDecision' ) );
+		$b = ( new Hooks( 'x', $this->faults ) )->with_decisions( array( 'MyDecision' ) )->for_front_end();
+		foreach ( array( $a, $b ) as $hooks ) {
+			$this->assertTrue( $hooks->wrap_guard_filter( static fn() => true, false )( null ) );
+		}
 	}
 }
