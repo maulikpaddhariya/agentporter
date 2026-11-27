@@ -35,6 +35,12 @@ if ( ! defined( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH' ) ) {
 	define( 'WP_TESTS_PHPUNIT_POLYFILLS_PATH', $agentporter_root . '/vendor/yoast/phpunit-polyfills' );
 }
 
+// The WordPress test config uses placeholder salts, which SecretStore rightly refuses; give the
+// suite its own random key (test-only).
+if ( ! defined( 'AGENTPORTER_SECRET_KEY' ) ) {
+	define( 'AGENTPORTER_SECRET_KEY', bin2hex( random_bytes( 32 ) ) );
+}
+
 require_once $agentporter_tests_dir . '/includes/functions.php';
 
 tests_add_filter(

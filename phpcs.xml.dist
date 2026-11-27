@@ -73,6 +73,20 @@
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 
+	<!--
+	Justification: tests may use plain PHP helpers (json_encode, var_export for assertion messages) and
+	mirror WordPress' own parameter names such as $default in function doubles. Production code keeps these rules.
+	-->
+	<rule ref="WordPress.WP.AlternativeFunctions">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.PHP.DevelopmentFunctions">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+	<rule ref="Universal.NamingConventions.NoReservedKeywordParameterNames">
+		<exclude-pattern>/tests/*</exclude-pattern>
+	</rule>
+
 	<!-- Justification: integration tests inspect the database directly to verify schema and lock rows. -->
 	<rule ref="WordPress.DB.DirectDatabaseQuery">
 		<exclude-pattern>/tests/*</exclude-pattern>

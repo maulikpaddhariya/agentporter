@@ -72,7 +72,7 @@ final class UninstallerTest extends \WP_UnitTestCase {
 	}
 
 	public function test_every_option_the_code_creates_is_owned(): void {
-		$names = array( Migrator::OPTION, Migrator::RETRY_OPTION, ( new Lock( $GLOBALS['wpdb'], 'x' ) )->option_name(), 'agentporter_secret_example', Uninstaller::OPT_IN_OPTION );
+		$names = array( Migrator::OPTION, Migrator::RETRY_OPTION, ( new Lock( $GLOBALS['wpdb'], 'x' ) )->option_name(), 'agentporter_secret_example', Uninstaller::OPT_IN_OPTION, \AgentPorter\Security\KillSwitch::OPTION, \AgentPorter\Security\AgentGuard::ENABLED_OPTION );
 		foreach ( $names as $name ) {
 			$owned = false;
 			foreach ( Uninstaller::OWNED_PREFIXES as $prefix ) {

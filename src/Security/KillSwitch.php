@@ -1,0 +1,73 @@
+<?php
+/**
+ * Global kill switch for agent access.
+ *
+ * @package AgentPorter
+ */
+
+declare(strict_types=1);
+
+namespace AgentPorter\Security;
+
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * One toggle (option) plus a wp-config constant. Read fresh on every call so turning it on takes
+ * effect within the same request. Fail closed: any value other than an explicit "0" or a missing
+ * option counts as ON.
+ */
+final class KillSwitch {
+
+	public const OPTION   = 'agentporter_kill_switch';
+	public const CONSTANT = 'AGENTPORTER_DISABLE_AGENTS';
+
+	/**
+	 * Whether the constant forces the switch on (null = read the constant).
+	 *
+	 * @var bool|null
+	 */
+	private ?bool $forced;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param bool|null $forced Override for the constant (tests); null reads AGENTPORTER_DISABLE_AGENTS.
+	 */
+	public function __construct( ?bool $forced = null ) {
+		$this->forced = $forced;
+	}
+
+	/**
+	 * Whether agent access is switched off.
+	 */
+	public function is_on(): bool {
+		if ( $this->is_forced_by_constant() ) {
+			return true;
+		}
+		$value = get_option( self::OPTION, null );
+		if ( null === $value || false === $value || '0' === $value || 0 === $value ) {
+			return false;
+		}
+		// '1', true, or anything unexpected: deny.
+		return true;
+	}
+
+	/**
+	 * Whether wp-config.php forces the switch on (cannot be turned off from the admin).
+	 */
+	public function is_forced_by_constant(): bool {
+		if ( null !== $this->forced ) {
+			return $this->forced;
+		}
+		return defined( self::CONSTANT ) && (bool) constant( self::CONSTANT );
+	}
+
+	/**
+	 * Turns the switch on or off. Callers must check capability + nonce and write an audit entry.
+	 *
+	 * @param bool $on New state.
+	 */
+	public function set( bool $on ): void {
+		update_option( self::OPTION, $on ? '1' : '0', true );
+	}
+}
