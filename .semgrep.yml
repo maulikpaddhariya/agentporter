@@ -56,9 +56,11 @@ rules:
               - pattern: file_put_contents($PATH, ...)
               - pattern: fopen($PATH, ...)
               - pattern: $FS->put_contents($PATH, ...)
-          - metavariable-regex:
+          # metavariable-regex is anchored at the start of the value; search anywhere in the path expression.
+          - metavariable-pattern:
               metavariable: $PATH
-              regex: (?i)(\.php|\.phtml|\.htaccess|\.user\.ini|nginx\.conf|wp-config)
+              patterns:
+                - pattern-regex: (?i)(\.php|\.phtml|\.htaccess|\.user\.ini|nginx\.conf|wp-config)
       - pattern: insert_with_markers(...)
 
   - id: agentporter-rest-route-without-permission-callback
