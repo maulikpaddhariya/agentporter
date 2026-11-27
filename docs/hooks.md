@@ -45,7 +45,19 @@ add_action( 'agentporter_guard_check', function ( $denials ) {
 } );
 ```
 
+### `agentporter_hourly_maintenance`
+
+WP-Cron event, scheduled hourly from admin and CLI requests (never from page views) and removed on deactivation. Purges expired rate-limit counters and audit entries older than the retention period, in bounded chunks. You do not need to hook into it; it is listed so you can recognise it in cron tools.
+
 ## Filters
+
+### `agentporter_audit_retention_days`
+
+Days to keep agent audit entries.
+
+| Argument | Type | Description |
+|---|---|---|
+| `$days` | `int` | Default `30`. Values are clamped to 1–3650. |
 
 ### `agentporter_redact_fields`
 
@@ -69,4 +81,8 @@ add_filter( 'agentporter_redact_fields', function ( $fields ) {
 | Constant | Effect |
 |---|---|
 | `AGENTPORTER_DISABLE_AGENTS` | When `true`, the kill switch is on: every agent call is denied. It cannot be turned off from the admin. |
-| `AGENTPORTER_SECRET_KEY` | Key material (32 bytes or more) for encrypting AgentPorter's own secrets. When it is not defined, the key is derived from `AUTH_KEY` and `SECURE_AUTH_SALT`. Placeholder salts are refused. |
+| `AGENTPORTER_SECRET_KEY` | Key material (32 bytes or more, not low-entropy) for encrypting AgentPorter's own secrets. When it is not defined, the key is derived from `AUTH_KEY` and `SECURE_AUTH_SALT`. Placeholder, translated-placeholder, duplicated or low-entropy salts are refused, and a weak `AGENTPORTER_SECRET_KEY` never falls back to the salts. |
+
+## Audit log codes
+
+Besides the denial codes returned to callers, the audit log can contain `agentporter_denials_suppressed`: one row per minute when a denial budget ran out (`{"scope":"user"}` for one granted user over 30 denials a minute, `{"scope":"site"}` when unauthenticated or ungranted denials passed 300 a minute site-wide). Denials past a budget are not written individually.

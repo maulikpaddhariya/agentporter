@@ -42,5 +42,13 @@ final class Activator {
 			// Activation still succeeds; the next admin request retries and the fault notice explains.
 			$plugin->faults()->disable( 'migrations', $error );
 		}
+		\AgentPorter\Security\Maintenance::ensure_scheduled();
+	}
+
+	/**
+	 * Deactivation callback: removes scheduled events.
+	 */
+	public static function deactivate(): void {
+		\AgentPorter\Security\Maintenance::unschedule();
 	}
 }

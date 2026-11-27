@@ -33,11 +33,12 @@ final class SecretStore {
 	private const CONTEXT = 'agentporter-secretstore-v1';
 
 	/**
-	 * Encryption key (32 bytes) or null when no safe key is available.
+	 * Encryption keys by instance. Kept outside the object's properties so var_export(), (array)
+	 * casts, serialize() and debuggers that walk properties never see key material.
 	 *
-	 * @var string|null
+	 * @var \WeakMap<SecretStore, string>|null
 	 */
-	private ?string $key;
+	private static ?\WeakMap $keys = null;
 
 	/**
 	 * Constructor.
@@ -45,14 +46,53 @@ final class SecretStore {
 	 * @param string|null $key_material Key material (tests); null reads wp-config constants.
 	 */
 	public function __construct( #[\SensitiveParameter] ?string $key_material = null ) {
-		$this->key = self::derive_key( $key_material ?? self::key_material_from_config() );
+		$key = self::derive_key( $key_material ?? self::key_material_from_config() );
+		if ( null !== $key ) {
+			self::keys()[ $this ] = $key;
+		}
+	}
+
+	/**
+	 * Key registry.
+	 *
+	 * @return \WeakMap<SecretStore, string>
+	 */
+	private static function keys(): \WeakMap {
+		self::$keys ??= new \WeakMap();
+		return self::$keys;
+	}
+
+	/**
+	 * This instance's key, or null.
+	 */
+	private function key(): ?string {
+		return self::keys()[ $this ] ?? null;
+	}
+
+	/**
+	 * Refuses serialization: a serialized store would carry nothing useful and must never carry a key.
+	 *
+	 * @throws \LogicException Always.
+	 */
+	public function __serialize(): array {
+		throw new \LogicException( 'SecretStore cannot be serialized.' );
+	}
+
+	/**
+	 * Refuses unserialization.
+	 *
+	 * @param array<mixed> $data Data.
+	 * @throws \LogicException Always.
+	 */
+	public function __unserialize( array $data ): void {
+		throw new \LogicException( 'SecretStore cannot be unserialized.' );
 	}
 
 	/**
 	 * Whether a safe key is available.
 	 */
 	public function is_available(): bool {
-		return null !== $this->key;
+		return null !== $this->key();
 	}
 
 	/**
@@ -65,7 +105,7 @@ final class SecretStore {
 	public function put( string $name, #[\SensitiveParameter] string $plaintext ): void {
 		$option = $this->option( $name ); // Validates the name first.
 		$key    = $this->require_key();
-		$nonce  = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
+		$nonce  = Crypto::random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 		$box    = sodium_crypto_secretbox( $plaintext, $nonce, $this->bind( $key, $name ) );
 		$value  = self::VERSION . base64_encode( $nonce . $box ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Binary ciphertext encoding, not obfuscation.
 		if ( ! update_option( $option, $value, false ) ) {
@@ -79,7 +119,8 @@ final class SecretStore {
 	 * @param string $name Secret name.
 	 */
 	public function get( string $name ): ?string {
-		if ( null === $this->key ) {
+		$key = $this->key();
+		if ( null === $key ) {
 			return null;
 		}
 		$stored = get_option( $this->option( $name ), null );
@@ -93,8 +134,8 @@ final class SecretStore {
 		$nonce = substr( $raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 		$box   = substr( $raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 		try {
-			$plain = sodium_crypto_secretbox_open( $box, $nonce, $this->bind( $this->key, $name ) );
-		} catch ( \SodiumException $e ) {
+			$plain = sodium_crypto_secretbox_open( $box, $nonce, $this->bind( $key, $name ) );
+		} catch ( \SodiumException ) {
 			return null;
 		}
 		return false === $plain ? null : $plain;
@@ -119,7 +160,7 @@ final class SecretStore {
 			throw new \RuntimeException( 'A stored secret cannot be decrypted with the current key.' );
 		}
 		$secret = Crypto::random_bytes( $bytes );
-		$nonce  = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
+		$nonce  = Crypto::random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 		$value  = self::VERSION . base64_encode( $nonce . sodium_crypto_secretbox( $secret, $nonce, $this->bind( $key, $name ) ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- Binary ciphertext encoding.
 		// add_option() inserts only when absent: if another request created it first, use theirs.
 		add_option( $option, $value, '', false );
@@ -137,7 +178,7 @@ final class SecretStore {
 	 * @return array<string, string>
 	 */
 	public function __debugInfo(): array {
-		return array( 'key' => null === $this->key ? 'unavailable' : '[hidden]' );
+		return array( 'key' => null === $this->key() ? 'unavailable' : '[hidden]' );
 	}
 
 	/**
@@ -168,7 +209,7 @@ final class SecretStore {
 	 * @param string $key  Master key.
 	 * @param string $name Secret name.
 	 */
-	private function bind( string $key, string $name ): string {
+	private function bind( #[\SensitiveParameter] string $key, string $name ): string {
 		return sodium_crypto_generichash( 'name:' . $name, $key, SODIUM_CRYPTO_SECRETBOX_KEYBYTES );
 	}
 
@@ -178,10 +219,11 @@ final class SecretStore {
 	 * @throws \RuntimeException When no safe key is available.
 	 */
 	private function require_key(): string {
-		if ( null === $this->key ) {
+		$key = $this->key();
+		if ( null === $key ) {
 			throw new \RuntimeException( 'No encryption key: define AGENTPORTER_SECRET_KEY or real AUTH_KEY/SECURE_AUTH_SALT in wp-config.php.' );
 		}
-		return $this->key;
+		return $key;
 	}
 
 	/**
@@ -200,14 +242,16 @@ final class SecretStore {
 			}
 		}
 		$counts = array_count_values( $values );
+		$parts  = array();
 		foreach ( array( 'AUTH_KEY', 'SECURE_AUTH_SALT' ) as $name ) {
 			$value = $values[ $name ] ?? '';
 			// WordPress core treats a salt reused across constants as insecure (pluggable.php, wp_salt()).
 			if ( ! self::is_strong( $value ) || ( $counts[ $value ] ?? 0 ) > 1 ) {
 				return '';
 			}
+			$parts[] = $value;
 		}
-		return 'wp:' . $values['AUTH_KEY'] . "\0" . $values['SECURE_AUTH_SALT'];
+		return 'wp:' . implode( "\0", $parts );
 	}
 
 	/**
@@ -237,7 +281,7 @@ final class SecretStore {
 	 *
 	 * @param string $material Key material.
 	 */
-	private static function derive_key( string $material ): ?string {
+	private static function derive_key( #[\SensitiveParameter] string $material ): ?string {
 		$secret = (string) preg_replace( '/^(own|wp):/', '', $material );
 		if ( strlen( $secret ) < 32 ) {
 			return null;

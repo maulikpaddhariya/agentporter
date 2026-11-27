@@ -45,16 +45,22 @@ final class SecuritySubsystem implements SecurityCritical {
 		$container->set( Redactor::class, static fn(): Redactor => new Redactor() );
 		$container->set( SecretStore::class, static fn(): SecretStore => new SecretStore() );
 		$container->set(
-			RateLimiter::class,
-			static fn( Container $c ): RateLimiter => new RateLimiter(
-				wp_using_ext_object_cache()
-					? new CacheRateStore()
-					: new DatabaseRateStore( $c->get( \wpdb::class ), $c->get( Schema::class ) )
-			)
+			RateStore::class,
+			static fn( Container $c ): RateStore => wp_using_ext_object_cache()
+				? new CacheRateStore()
+				: new DatabaseRateStore( $c->get( \wpdb::class ), $c->get( Schema::class ) )
 		);
+		$container->set( RateLimiter::class, static fn( Container $c ): RateLimiter => new RateLimiter( $c->get( RateStore::class ) ) );
 		$container->set(
 			AuditLog::class,
 			static fn( Container $c ): AuditLog => new AuditLog( $c->get( \wpdb::class ), $c->get( Schema::class ), $c->get( Redactor::class ) )
+		);
+		$container->set(
+			Maintenance::class,
+			static function ( Container $c ): Maintenance {
+				$store = $c->get( RateStore::class );
+				return new Maintenance( $c->get( AuditLog::class ), $store instanceof DatabaseRateStore ? $store : null );
+			}
 		);
 		$container->set(
 			AgentGuard::class,
@@ -66,5 +72,12 @@ final class SecuritySubsystem implements SecurityCritical {
 				$c->get( Logger::class )
 			)
 		);
+	
+		$hooks->add_action( Maintenance::HOOK, static fn() => $container->get( Maintenance::class )->run() );
+		// Scheduling writes the cron option, so only admin and CLI requests do it, never page views.
+		$hooks->add_action( 'admin_init', array( Maintenance::class, 'ensure_scheduled' ) );
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			$hooks->add_action( 'init', array( Maintenance::class, 'ensure_scheduled' ) );
+		}
 	}
 }

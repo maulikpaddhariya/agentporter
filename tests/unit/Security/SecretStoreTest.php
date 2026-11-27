@@ -11,6 +11,8 @@ use AgentPorter\Security\SecretStore;
 use AgentPorter\Tests\Unit\TestCase;
 use Brain\Monkey\Functions;
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound, WordPress.NamingConventions.PrefixAllGlobals.VariableConstantNameFound -- Separate-process tests define the WordPress/AgentPorter key constants under test.
+
 /**
  * @covers \AgentPorter\Security\SecretStore
  * @covers \AgentPorter\Security\Crypto
@@ -126,9 +128,89 @@ final class SecretStoreTest extends TestCase {
 		$this->assertNotSame( $secret, $store->get_or_create( 'cart_hmac', 32 ) );
 	}
 
-	public function test_wordpress_placeholder_salts_are_rejected(): void {
-		// Without constants in the unit environment, the config path yields no key.
+	public function test_no_key_constants_yields_no_key(): void {
 		$this->assertFalse( ( new SecretStore() )->is_available() );
+	}
+
+	/**
+	 * Distinct, strong values for every WordPress key and salt constant.
+	 *
+	 * @return array<string, string>
+	 */
+	private static function salts(): array {
+		$out = array();
+		foreach ( array( 'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY', 'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT' ) as $i => $name ) {
+			$out[ $name ] = hash( 'sha256', 'salt-' . $name ) . '#' . $i;
+		}
+		return $out;
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_key_is_derived_from_auth_key_and_secure_auth_salt(): void {
+		$salts = self::salts();
+		foreach ( $salts as $name => $value ) {
+			define( $name, $value );
+		}
+		$store = new SecretStore();
+		$this->assertTrue( $store->is_available() );
+		$store->put( 'probe', 'value' );
+		$this->assertSame( 'value', $this->store( 'wp:' . $salts['AUTH_KEY'] . "\0" . $salts['SECURE_AUTH_SALT'] )->get( 'probe' ) );
+		$this->assertNull( $this->store( 'wp:' . $salts['AUTH_KEY'] . "\0" . $salts['NONCE_SALT'] )->get( 'probe' ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_duplicated_wp_salts_are_refused(): void {
+		$salts              = self::salts();
+		$salts['NONCE_KEY'] = $salts['AUTH_KEY']; // Reused anywhere, as wp_salt() treats it: insecure.
+		foreach ( $salts as $name => $value ) {
+			define( $name, $value );
+		}
+		$this->assertFalse( ( new SecretStore() )->is_available() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_placeholder_wp_salts_are_refused(): void {
+		Functions\when( '__' )->returnArg();
+		define( 'AUTH_KEY', 'put your unique phrase here' );
+		define( 'SECURE_AUTH_SALT', 'put your unique phrase here' );
+		$this->assertFalse( ( new SecretStore() )->is_available() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_weak_agentporter_secret_key_does_not_fall_back_to_salts(): void {
+		foreach ( self::salts() as $name => $value ) {
+			define( $name, $value );
+		}
+		define( 'AGENTPORTER_SECRET_KEY', 'too-short' );
+		$this->assertFalse( ( new SecretStore() )->is_available() );
+	}
+
+	public function test_var_export_cast_and_serialize_never_expose_the_key(): void {
+		$material = 'own:0123456789abcdef0123456789abcdef-test-key';
+		$store    = $this->store( $material );
+		$key      = sodium_crypto_generichash( "agentporter-secretstore-v1\0" . $material, '', SODIUM_CRYPTO_SECRETBOX_KEYBYTES );
+		$this->assertTrue( $store->is_available() );
+		$this->assertSame( array(), (array) $store );
+		$this->assertStringNotContainsString( $key, var_export( $store, true ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- Asserting what debug output would leak.
+		$this->expectException( \LogicException::class );
+		serialize( $store ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_serialize -- Asserting serialization is refused.
+	}
+
+	public function test_clone_carries_no_key_and_fails_closed(): void {
+		$clone = clone $this->store();
+		$this->assertFalse( $clone->is_available() );
 	}
 
 	public function test_get_or_create_never_overwrites_an_undecryptable_secret(): void {

@@ -200,6 +200,10 @@ final class AgentGuardTest extends TestCase {
 		$this->assertSame( '203.0.113.9', AgentGuard::network_of( '::ffff:203.0.113.9' ) );
 		$this->assertSame( 'unknown', AgentGuard::network_of( '' ) );
 		$this->assertSame( 'unknown', AgentGuard::network_of( 'garbage' ) );
+		// IPv6 that embeds one IPv4 host (6to4, Teredo) buckets as that host, not as 65k /64s.
+		$this->assertSame( '192.0.2.1', AgentGuard::network_of( '2002:c000:0201:1::1' ) );
+		$this->assertSame( '192.0.2.1', AgentGuard::network_of( '2002:c000:0201:ffff::1' ) );
+		$this->assertSame( '192.0.2.1', AgentGuard::network_of( '2001:0:4136:e378:8000:63bf:3fff:fdfe' ) );
 	}
 
 	public function test_rotating_ipv6_within_a_64_hits_the_ip_limit(): void {
@@ -227,6 +231,51 @@ final class AgentGuardTest extends TestCase {
 			$guard->check( self::ABILITY, $this->context( 0 ) );
 		}
 		$this->assertSame( AgentGuard::AUDIT_DENIALS, count( $this->wpdb->inserted ) );
+	}
+
+	public function test_denial_audit_has_a_global_ceiling_across_networks(): void {
+		$guard = $this->guard();
+		for ( $i = 0; $i < 2000; $i++ ) { // 2000 distinct /64s, as from a free /48.
+			$guard->check( self::ABILITY, $this->context( 0, null, sprintf( '2001:db8:0:%x::1', $i ) ) );
+		}
+		$codes = array_column( array_column( $this->wpdb->inserted, 1 ), 'error_code' );
+		$this->assertSame( AgentGuard::AUDIT_SITE_MAX, count( array_keys( $codes, 'agentporter_forbidden', true ) ) );
+		$this->assertSame( array( AgentGuard::SUPPRESSED_CODE ), array_values( array_diff( $codes, array( 'agentporter_forbidden' ) ) ), 'one suppression marker' );
+		$network_counters = array_filter( array_keys( $this->rates->counts ), static fn( $k ) => str_contains( $k, 'audit-deny:' ) && ! str_contains( $k, 'site' ) );
+		$this->assertLessThanOrEqual( AgentGuard::AUDIT_SITE_MAX, count( $network_counters ), 'no per-network counters past the ceiling' );
+	}
+
+	public function test_authenticated_denials_are_audited_despite_anonymous_flood_from_same_network(): void {
+		$guard = $this->guard();
+		for ( $i = 0; $i < 500; $i++ ) {
+			$guard->check( self::ABILITY, $this->context( 0 ) );
+		}
+		$before = count( $this->wpdb->inserted );
+		$this->assertDenied( $guard->check( self::ABILITY, $this->context( 7, array( 'agentporter/other' ) ) ), 'agentporter_out_of_scope' );
+		$this->assertCount( $before + 1, $this->wpdb->inserted );
+		$this->assertSame( 'agentporter_out_of_scope', end( $this->wpdb->inserted )[1]['error_code'] );
+	}
+
+	public function test_suppressed_denials_leave_one_marker_per_user_window(): void {
+		$guard = $this->guard();
+		for ( $i = 0; $i < 100; $i++ ) {
+			$guard->check( self::ABILITY, $this->context( 7, array( 'agentporter/other' ) ) );
+		}
+		$codes = array_column( array_column( $this->wpdb->inserted, 1 ), 'error_code' );
+		$this->assertSame( AgentGuard::AUDIT_DENIALS, count( array_keys( $codes, 'agentporter_out_of_scope', true ) ) );
+		$this->assertSame( 1, count( array_keys( $codes, AgentGuard::SUPPRESSED_CODE, true ) ) );
+		$marker = end( $this->wpdb->inserted )[1];
+		$this->assertSame( 7, $marker['actor_id'] );
+		$this->assertSame( '{"scope":"user"}', $marker['input_redacted'] );
+	}
+
+	public function test_static_authorize_failure_returns_uniform_forbidden_to_unauthorized_callers(): void {
+		Functions\when( 'get_current_user_id' )->justReturn( 0 );
+		// No booted plugin/guard in unit tests: the static entry point must fail closed.
+		$this->assertDenied( AgentGuard::authorize( self::ABILITY, $this->context( 0 ) ), 'agentporter_forbidden' );
+		$this->assertDenied( AgentGuard::authorize( self::ABILITY, $this->context( 42 ) ), 'agentporter_forbidden' );
+		$this->assertDenied( AgentGuard::authorize( self::ABILITY, $this->context( 7 ) ), 'agentporter_unavailable', 503 );
+		$this->assertDenied( AgentGuard::authorize( self::ABILITY ), 'agentporter_forbidden' );
 	}
 
 	public function test_ip_rate_limit_applies_across_users_and_never_stores_the_raw_ip(): void {

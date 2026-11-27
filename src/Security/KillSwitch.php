@@ -13,8 +13,8 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * One toggle (option) plus a wp-config constant. Read fresh on every call so turning it on takes
- * effect within the same request. Fail closed: any value other than an explicit "0" or a missing
- * option counts as ON.
+ * effect within the same request. Fail closed: any value other than an explicit "0" counts as ON.
+ * A missing option (never toggled) is OFF; refresh() treats a database error as ON.
  */
 final class KillSwitch {
 
@@ -44,12 +44,16 @@ final class KillSwitch {
 		if ( $this->is_forced_by_constant() ) {
 			return true;
 		}
-		$value = get_option( self::OPTION, null );
-		if ( null === $value || false === $value || '0' === $value || 0 === $value ) {
-			return false;
-		}
-		// '1', true, or anything unexpected: deny.
-		return true;
+		return self::interpret( get_option( self::OPTION, null ) );
+	}
+
+	/**
+	 * Maps a stored value to the switch state. '1', true, or anything unexpected: ON.
+	 *
+	 * @param mixed $value Stored option value (null/false = missing).
+	 */
+	private static function interpret( mixed $value ): bool {
+		return ! ( null === $value || false === $value || '0' === $value || 0 === $value );
 	}
 
 	/**
@@ -77,7 +81,36 @@ final class KillSwitch {
 	 * this before each batch so turning the switch on stops work already in progress.
 	 */
 	public function refresh(): bool {
+		if ( $this->is_forced_by_constant() ) {
+			return true;
+		}
+		self::forget_cached();
+
+		// Read the row directly: get_option() trusts the 'notoptions' cache, so a process that first
+		// saw the option missing would never notice the switch being turned on elsewhere.
+		global $wpdb;
+		$suppress = $wpdb->suppress_errors( true );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- must bypass the options cache.
+		$value = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s LIMIT 1', $wpdb->options, self::OPTION ) );
+		$error = (string) $wpdb->last_error;
+		$wpdb->suppress_errors( $suppress );
+
+		if ( '' !== $error ) {
+			return true; // Cannot read the switch: fail closed.
+		}
+		$value = null === $value ? null : maybe_unserialize( $value );
+		return self::interpret( $value );
+	}
+
+	/**
+	 * Drops the option and its "missing" marker from the object cache so the next read hits the DB.
+	 */
+	private static function forget_cached(): void {
 		wp_cache_delete( self::OPTION, 'options' );
-		return $this->is_on();
+		$missing = wp_cache_get( 'notoptions', 'options' );
+		if ( is_array( $missing ) && isset( $missing[ self::OPTION ] ) ) {
+			unset( $missing[ self::OPTION ] );
+			wp_cache_set( 'notoptions', $missing, 'options' );
+		}
 	}
 }

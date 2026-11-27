@@ -38,6 +38,12 @@ if ( ! class_exists( 'wpdb' ) ) {
 		public $options  = 'wp_options';
 		public $inserted = array();
 		public $fail     = false;
+		public $last_error = '';
+		public $var_result = null;
+		public $queries    = array();
+		public function suppress_errors( $suppress = true ) {
+			return false;
+		}
 		public function insert( $table, $data, $format = null ) {
 			if ( $this->fail ) {
 				return false;
@@ -48,11 +54,17 @@ if ( ! class_exists( 'wpdb' ) ) {
 		public function prepare( $query, ...$args ) {
 			return $query;
 		}
+		public $query_results = array();
 		public function query( $query ) {
-			return 0;
+			$this->queries[] = $query;
+			if ( $this->fail ) {
+				return false;
+			}
+			return array() === $this->query_results ? 0 : array_shift( $this->query_results );
 		}
 		public function get_var( $query = null ) {
-			return null;
+			$this->queries[] = $query;
+			return $this->var_result;
 		}
 		public function get_charset_collate() {
 			return '';

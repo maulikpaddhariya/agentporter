@@ -192,4 +192,76 @@ final class SecurityCoreTest extends \WP_UnitTestCase {
 		$rows = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $wpdb->prefix . Schema::AUDIT ) );
 		$this->assertSame( AgentGuard::AUDIT_DENIALS, $rows );
 	}
+
+	public function test_hourly_maintenance_is_wired_scheduled_and_purges_expired_rows(): void {
+		global $wpdb;
+		$this->assertNotFalse( has_action( \AgentPorter\Security\Maintenance::HOOK ) );
+		wp_clear_scheduled_hook( \AgentPorter\Security\Maintenance::HOOK );
+		\AgentPorter\Security\Maintenance::ensure_scheduled();
+		$this->assertNotFalse( wp_next_scheduled( \AgentPorter\Security\Maintenance::HOOK ) );
+
+		$rate  = $wpdb->prefix . Schema::RATE;
+		$audit = $wpdb->prefix . Schema::AUDIT;
+		$wpdb->insert(
+			$rate,
+			array(
+				'bucket'       => 'r:old',
+				'window_start' => time() - 7200,
+				'count'        => 5,
+			) 
+		);
+		$wpdb->insert(
+			$rate,
+			array(
+				'bucket'       => 'r:new',
+				'window_start' => time() - 30,
+				'count'        => 1,
+			) 
+		);
+		foreach ( array(
+			'old' => 40,
+			'new' => 1,
+		) as $ability => $days ) {
+			$wpdb->insert(
+				$audit,
+				array(
+					'ts'             => gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS ),
+					'actor_type'     => 'user',
+					'actor_id'       => 1,
+					'ability'        => 'agentporter/' . $ability,
+					'input_redacted' => '{}',
+					'result'         => 2,
+					'error_code'     => 'x',
+					'ip_trunc'       => '',
+					'duration_ms'    => 0,
+				) 
+			);
+		}
+
+		do_action( \AgentPorter\Security\Maintenance::HOOK );
+
+		$this->assertSame( array( 'r:new' ), $wpdb->get_col( $wpdb->prepare( 'SELECT bucket FROM %i', $rate ) ) );
+		$this->assertSame( array( 'agentporter/new' ), $wpdb->get_col( $wpdb->prepare( 'SELECT ability FROM %i', $audit ) ) );
+
+		\AgentPorter\Core\Activator::deactivate();
+		$this->assertFalse( wp_next_scheduled( \AgentPorter\Security\Maintenance::HOOK ) );
+	}
+
+	public function test_refresh_sees_switch_enabled_by_another_process_when_option_was_missing(): void {
+		global $wpdb;
+		$switch = new KillSwitch( false );
+		$this->assertFalse( $switch->is_on() ); // Primes the 'notoptions' cache.
+		// Another process (the owner in wp-admin) turns the switch on; this process's cache is stale.
+		$wpdb->insert(
+			$wpdb->options,
+			array(
+				'option_name'  => KillSwitch::OPTION,
+				'option_value' => '1',
+				'autoload'     => 'off',
+			) 
+		);
+		$this->assertFalse( $switch->is_on(), 'Precondition: the cached read is stale.' );
+		$this->assertTrue( $switch->refresh() );
+		$this->assertTrue( $switch->is_on(), 'refresh() also clears the stale marker for later reads.' );
+	}
 }

@@ -129,6 +129,22 @@ final class RedactorTest extends TestCase {
 			'stripe key'              => array( $stripe . ' ok', substr( $stripe, 0, 22 ) ),
 			'github token'            => array( $github, substr( $github, 0, 12 ) ),
 			'idn email'               => array( 'mail müller@bücher.de now', 'müller' ),
+			'prefixed db password'    => array( 'db_password=hunter2 ok', 'hunter2' ),
+			'wp user_pass'            => array( 'user_pass=hunter2', 'hunter2' ),
+			'colon wp_password'       => array( 'wp_password: hunter2', 'hunter2' ),
+			'env upper secret'        => array( 'MY_SECRET=hunter2xyz', 'hunter2xyz' ),
+			'json style pair'         => array( 'got "pwd": "hunter2" back', 'hunter2' ),
+			'quoted value with space' => array( 'password="correct horse battery"', 'horse' ),
+			'header api key'          => array( 'X-Api-Key: abcdef0123', 'abcdef0123' ),
+			'oauth code in query'     => array( '/cb?code=Zx81kQ&state=1', 'Zx81kQ' ),
+			'url password no user'    => array( 'postgres://:hunter2@db:5432/x', 'hunter2' ),
+			'url token as user'       => array( 'https://' . $github . '@github.com/o/r', substr( $github, 4, 10 ) ),
+			'long local part email'   => array( str_repeat( 'a', 80 ) . '@example.com', str_repeat( 'a', 70 ) ),
+			'letters-only github key' => array( implode( '_', array( 'ghp', str_repeat( 'abcdEFGH', 5 ) ) ), 'abcdEFGHabcd' ),
+			'letters-only openai key' => array( implode( '-', array( 'sk', 'proj', str_repeat( 'abcdEFGH', 3 ) ) ), 'abcdEFGHabcd' ),
+			'token auth scheme'       => array( 'Authorization: Token abcdefgh', 'abcdefgh' ),
+			'digest auth scheme'      => array( 'Authorization: Digest username="a", response="xyz"', 'xyz' ),
+			'second cookie'           => array( 'Cookie: a=1; wordpress_logged_in_x=admin%7Cabc', 'admin%7Cabc' ),
 		);
 	}
 
@@ -179,6 +195,72 @@ final class RedactorTest extends TestCase {
 		$this->assertStringContainsString( '42', $json );
 	}
 
+	public function test_ordinary_text_is_left_alone(): void {
+		$text = 'Note: shoes size=42 colour: blue, see https://example.org/path?q=red at 10:30';
+		$this->assertSame( $text, ( new Redactor() )->redact_string( $text ) );
+	}
+
+	public function test_malformed_and_over_depth_json_strings_are_dropped(): void {
+		$deep = '"x"';
+		for ( $i = 0; $i < 12; $i++ ) {
+			$deep = '{"a":' . $deep . '}';
+		}
+		$inputs = array(
+			'unterminated' => '{"password":"hunter2"',
+			'over depth'   => '{"password":"hunter2","x":' . $deep . '}',
+			'array form'   => '[{"token":"hunter2"',
+		);
+		foreach ( $inputs as $label => $input ) {
+			foreach ( array( $input, array( 'payload' => $input ), array( 'a' => array( 'b' => $input ) ) ) as $data ) {
+				$json = ( new Redactor() )->to_json( $data );
+				$this->assertStringNotContainsString( 'hunter2', $json, $label );
+				$this->assertStringContainsString( '[unparsed-json]', $json, $label );
+			}
+		}
+		// Log lines that merely start with a bracket are still redacted as text, not dropped.
+		$this->assertSame( '[INFO] password=[redacted]', ( new Redactor() )->redact_string( '[INFO] password=hunter2' ) );
+		$this->assertSame( '[INFO] password=[redacted]', ( new Redactor() )->redact( '[INFO] password=hunter2' ) );
+	}
+
+	public function test_integer_keys_and_floats_with_long_digit_runs_are_masked(): void {
+		$json = ( new Redactor() )->to_json(
+			array(
+				'4111111111111111' => 'x',
+				'5500000000000004' => 'y',
+				'7'                => 'keep',
+				'f'                => 919876543210.0,
+				'price'            => 19.99,
+				'inf'              => INF,
+			)
+		);
+		$this->assertStringNotContainsString( '4111111111111111', $json );
+		$this->assertStringNotContainsString( '5500000000000004', $json );
+		$this->assertStringNotContainsString( '9198765', $json );
+		$this->assertStringContainsString( '19.99', $json );
+		$this->assertStringContainsString( '"7":"keep"', $json );
+	}
+
+	public function test_short_sensitive_field_names_are_masked(): void {
+		$keys = array( 'pw', 'passcode', 'userpass', 'dbpass', 'sessionid', 'cardnumber', 'phonenumber', 'PHPSESSID' );
+		$out  = ( new Redactor() )->redact( array_fill_keys( $keys, 'hunter2' ) );
+		foreach ( $keys as $key ) {
+			$this->assertSame( Redactor::MASK, $out[ $key ], $key );
+		}
+	}
+
+	public function test_large_inputs_redact_within_50ms(): void {
+		$letters = array_fill( 0, 100, str_repeat( 'abcdefghij', 200 ) );
+		$tokens  = array_fill( 0, 100, str_repeat( 'Ab1/', 500 ) );
+		$emails  = array_fill( 0, 100, str_repeat( 'a', 1000 ) . '@' . str_repeat( 'a-', 499 ) );
+		$pairs   = array_fill( 0, 100, str_repeat( 'a_', 1000 ) );
+		$huge    = array_fill( 0, 5000, str_repeat( 'abcdefghij', 200 ) );
+		foreach ( array( $letters, $tokens, $emails, $pairs, $huge ) as $i => $input ) {
+			$start = microtime( true );
+			( new Redactor() )->to_json( $input );
+			$this->assertLessThan( 0.05, microtime( true ) - $start, "input set $i (SECURITY-MODEL §8: < 50 ms)" );
+		}
+	}
+
 	public function test_adversarial_inputs_finish_quickly(): void {
 		$inputs = array(
 			str_repeat( '1 ', 1000 ),
@@ -189,6 +271,11 @@ final class RedactorTest extends TestCase {
 			str_repeat( '+1(', 666 ),
 			'https://' . str_repeat( 'a:', 990 ),
 			str_repeat( 'password=', 220 ),
+			str_repeat( 'abcdefghij', 200 ),
+			str_repeat( 'a', 1999 ) . '@',
+			str_repeat( 'a_', 1000 ),
+			str_repeat( 'k:"', 666 ),
+			str_repeat( 'x="\\', 500 ),
 		);
 		foreach ( $inputs as $input ) {
 			$start = microtime( true );
