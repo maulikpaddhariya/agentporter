@@ -218,3 +218,48 @@ final class ActionThenThrowsSubsystem implements Subsystem {
  */
 final class DenyDecision extends \RuntimeException implements \AgentPorter\Core\DecisionException {
 }
+
+/**
+ * Security-critical subsystem depending on "keys", with a guard filter.
+ */
+final class CriticalDependentGuardSubsystem implements \AgentPorter\Core\SecurityCritical, \AgentPorter\Core\DependsOn {
+	public function id(): string {
+		return 'agentguard';
+	}
+	public function depends_on(): array {
+		return array( 'keys' );
+	}
+	public function register( Container $container, Hooks $hooks ): void {
+		$hooks->add_guard_filter( 'agentporter_test_allow', static fn() => true, false );
+	}
+}
+
+/**
+ * "keys": a pass-through filter that throws at runtime.
+ */
+final class KeysSubsystem implements Subsystem {
+	public function id(): string {
+		return 'keys';
+	}
+	public function register( Container $container, Hooks $hooks ): void {
+		$hooks->add_action(
+			'agentporter_test_keys',
+			static function () {
+				throw new \RuntimeException( 'attacker-triggered key parse failure' );
+			}
+		);
+	}
+}
+
+/**
+ * Seals the container, then throws.
+ */
+final class SealsThenThrowsSubsystem implements \AgentPorter\Core\SecurityCritical {
+	public function id(): string {
+		return 'sealer';
+	}
+	public function register( Container $container, Hooks $hooks ): void {
+		$container->seal();
+		throw new \RuntimeException( 'after sealing' );
+	}
+}

@@ -57,7 +57,12 @@ final class SubsystemHooksTest extends TestCase {
 					continue;
 				}
 				$found[] = $name . ':' . $line;
-			} elseif ( T_CONSTANT_ENCAPSED_STRING === $id && in_array( strtolower( trim( $text, '\'"' ) ), $banned, true ) ) {
+			} elseif ( in_array( $id, array( T_VARIABLE, T_CONSTANT_ENCAPSED_STRING, T_ENCAPSED_AND_WHITESPACE ), true ) && 1 === preg_match( '/wp_filter/i', $text ) ) {
+				// Direct manipulation of the global hook registry ($GLOBALS['wp_filter'], $wp_filter).
+				$found[] = 'wp_filter:' . $line;
+			} elseif ( T_STRING === $id && 'wp_hook' === strtolower( $text ) ) {
+				$found[] = 'WP_Hook:' . $line;
+			} elseif ( T_CONSTANT_ENCAPSED_STRING === $id && in_array( strtolower( ltrim( trim( $text, '\'"' ), '\\' ) ), $banned, true ) ) {
 				// String callables such as call_user_func with a hook function name, or a variable function name.
 				$found[] = 'string ' . trim( $text, '\'"' ) . ':' . $line;
 			}
@@ -124,6 +129,10 @@ final class SubsystemHooksTest extends TestCase {
 			'<?php $f = \'add_filter\'; $f( "x", "f" );',
 			'<?php remove_all_filters( "the_content" );',
 			'<?php remove_action( "init", "other_plugin" );',
+			'<?php call_user_func( "\\add_action", "init", "f" );',
+			'<?php unset( $GLOBALS["wp_filter"]["init"] );',
+			'<?php global $wp_filter; $wp_filter = array();',
+			'<?php $h = new WP_Hook();',
 		);
 		foreach ( $bypasses as $code ) {
 			$this->assertNotSame( array(), self::scan( $code, false ), $code );

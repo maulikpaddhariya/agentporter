@@ -118,13 +118,23 @@ final class Plugin {
 
 		( new FaultNotice( $this->faults ) )->register();
 
+		// A critical subsystem that is not in the boot list would never run: deny agent access.
+		foreach ( $this->critical_classes as $critical ) {
+			if ( ! in_array( $critical, $this->subsystems, true ) ) {
+				$this->faults->lock_down();
+			}
+		}
+
 		// Failure listeners run only after the container is sealed, so they cannot register services.
 		$this->faults->begin_deferral();
-		foreach ( $this->subsystems as $class_name ) {
-			$this->boot_one( $class_name );
+		try {
+			foreach ( $this->subsystems as $class_name ) {
+				$this->boot_one( $class_name );
+			}
+		} finally {
+			$this->container->seal();
+			$this->faults->end_deferral();
 		}
-		$this->container->seal();
-		$this->faults->end_deferral();
 
 		try {
 			/**
@@ -171,22 +181,29 @@ final class Plugin {
 				$this->faults->mark_critical( $id );
 			}
 
-			$dependencies = $subsystem instanceof DependsOn ? $subsystem->depends_on() : array();
+			$dependencies = $subsystem instanceof DependsOn ? array_values( $subsystem->depends_on() ) : array();
+			$this->faults->register_dependencies( $id, $dependencies );
 			foreach ( $dependencies as $dependency ) {
 				if ( ! in_array( $dependency, $this->booted_subsystems, true ) || $this->faults->is_disabled( $dependency ) ) {
 					throw new \LogicException( 'A required subsystem is not available.' );
 				}
 			}
 
-			$subsystem->register( $this->container, new Hooks( $id, $this->faults, array_values( $dependencies ) ) );
+			$subsystem->register( $this->container, new Hooks( $id, $this->faults, $dependencies ) );
 			$this->booted_subsystems[] = $id;
 		} catch ( \Throwable $error ) {
-			// Drop services the failed subsystem registered so nothing else can resolve half-built state.
-			$this->container->rollback( $snapshot );
+			// Record the failure first: nothing below may prevent lockdown or the disable.
 			if ( $critical ) {
 				$this->faults->lock_down();
 			}
 			$this->faults->disable( $fault_id, $error );
+			// Drop services the failed subsystem registered so nothing else can resolve half-built state.
+			try {
+				$this->container->rollback( $snapshot );
+			} catch ( \Throwable $rollback_error ) {
+				// The subsystem sealed or broke the container: treat as critical.
+				$this->faults->lock_down();
+			}
 		}
 	}
 

@@ -199,4 +199,40 @@ final class PluginTest extends TestCase {
 		$this->assertFalse( $this->container->has( \SplQueue::class ), 'Listener ran after the seal, so set() was refused.' );
 		$this->assertSame( array( 'good' ), $plugin->booted_subsystems() );
 	}
+
+	public function test_runtime_dependency_failure_disables_dependent_and_locks_down_when_critical(): void {
+		$plugin = $this->plugin( array( Fixtures\KeysSubsystem::class, Fixtures\CriticalDependentGuardSubsystem::class ) );
+		$plugin->boot();
+		$this->assertFalse( $plugin->faults()->is_locked_down() );
+		$plugin->faults()->disable( 'keys', new \RuntimeException( 'runtime' ) );
+		$this->assertTrue( $plugin->faults()->is_disabled( 'agentguard' ), 'Cascades to the dependent.' );
+		$this->assertSame( 'dependency:keys', $plugin->faults()->disabled()['agentguard'] );
+		$this->assertTrue( $plugin->faults()->is_locked_down(), 'Reviewer M1: a critical dependent going dead must lock down.' );
+	}
+
+	public function test_subsystem_that_seals_the_container_then_fails_cannot_escape_boot(): void {
+		$plugin = $this->plugin( array( Fixtures\SealsThenThrowsSubsystem::class, Fixtures\GoodSubsystem::class ) );
+		$plugin->boot();
+		$this->assertTrue( $plugin->faults()->is_locked_down() );
+		$this->assertTrue( $plugin->faults()->is_disabled( 'sealer' ) );
+		$this->assertTrue( $plugin->is_booted() );
+	}
+
+	public function test_critical_class_missing_from_boot_list_locks_down(): void {
+		$plugin = $this->plugin( array( Fixtures\GoodSubsystem::class ), array( Fixtures\CriticalGuardSubsystem::class ) );
+		$plugin->boot();
+		$this->assertTrue( $plugin->faults()->is_locked_down() );
+	}
+
+	public function test_shipped_critical_subsystems_are_booted_and_marked(): void {
+		$this->addToAssertionCount( 1 ); // P0-2 ships no critical subsystem yet; the loops guard future ones.
+		foreach ( Plugin::critical_subsystems() as $critical ) {
+			$this->assertContains( $critical, Plugin::default_subsystems() );
+		}
+		foreach ( Plugin::default_subsystems() as $class ) {
+			if ( is_subclass_of( $class, \AgentPorter\Core\SecurityCritical::class ) ) {
+				$this->assertContains( $class, Plugin::critical_subsystems(), $class . ' implements SecurityCritical but is not listed.' );
+			}
+		}
+	}
 }

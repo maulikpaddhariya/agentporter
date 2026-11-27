@@ -288,4 +288,34 @@ final class HooksTest extends TestCase {
 			$this->assertFalse( $this->faults->is_disabled( 'checkout-policy' ) );
 		}
 	}
+
+	public function test_non_closure_callable_deny_values_are_rejected(): void {
+		foreach ( array( '__return_false', array( 'DateTime', 'createFromFormat' ), 'DateTime::createFromFormat', new \stdClass() ) as $deny ) {
+			try {
+				( new Hooks( 'guard', $this->faults ) )->wrap_guard_filter( static fn() => true, $deny );
+				$this->fail( 'Expected rejection.' );
+			} catch ( \InvalidArgumentException $e ) {
+				$this->addToAssertionCount( 1 );
+			}
+		}
+		$this->assertInstanceOf( \Closure::class, ( new Hooks( 'guard', $this->faults ) )->wrap_guard_filter( static fn() => true, 'denied-string' ) );
+	}
+
+	public function test_broad_exception_classes_cannot_be_decisions(): void {
+		foreach ( array( 'Throwable', '\\Exception', 'Error', 'RuntimeException', 'TypeError', 'InvalidArgumentException' ) as $class ) {
+			try {
+				( new Hooks( 'guard', $this->faults ) )->with_decisions( array( $class ) );
+				$this->fail( 'Expected rejection of ' . $class );
+			} catch ( \InvalidArgumentException $e ) {
+				$this->addToAssertionCount( 1 );
+			}
+		}
+	}
+
+	public function test_agent_facing_guards_deny_under_lockdown_but_gate_guards_do_not(): void {
+		$this->faults->lock_down();
+		$hooks = new Hooks( 'serve', $this->faults );
+		$this->assertFalse( $hooks->for_agents()->wrap_guard_filter( static fn() => true, false )( null ) );
+		$this->assertTrue( $hooks->wrap_guard_filter( static fn() => true, false )( null ), 'The front-end gate must keep serving pages.' );
+	}
 }

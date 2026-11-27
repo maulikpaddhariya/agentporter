@@ -49,6 +49,13 @@ final class Faults {
 	private bool $deferring = false;
 
 	/**
+	 * Dependency graph: subsystem id => ids it depends on.
+	 *
+	 * @var array<string, list<string>>
+	 */
+	private array $dependencies = array();
+
+	/**
 	 * Queued failure actions: [subsystem id, exception class].
 	 *
 	 * @var list<array{0: string, 1: string}>
@@ -73,6 +80,18 @@ final class Faults {
 		if ( isset( $this->disabled[ $subsystem ] ) ) {
 			$this->locked_down = true;
 		}
+	}
+
+	/**
+	 * Records what a subsystem depends on, so a later failure of a dependency also disables it.
+	 *
+	 * @param string $subsystem    Subsystem id.
+	 * @param array  $dependencies Ids it depends on.
+	 *
+	 * @phpstan-param list<string> $dependencies
+	 */
+	public function register_dependencies( string $subsystem, array $dependencies ): void {
+		$this->dependencies[ $subsystem ] = array_values( $dependencies );
 	}
 
 	/**
@@ -104,6 +123,7 @@ final class Faults {
 		}
 		$class                        = self::class_name( $error );
 		$this->disabled[ $subsystem ] = $class;
+		$this->cascade( $subsystem );
 
 		// Never log the exception message (it may carry tokens, emails or request data) or absolute paths.
 		$this->logger->error(
@@ -122,6 +142,29 @@ final class Faults {
 			return;
 		}
 		$this->fire( $subsystem, $class );
+	}
+
+	/**
+	 * Disables every subsystem that (transitively) depends on a disabled one, entering lockdown if any
+	 * of them is security-critical. Runs at boot and at runtime alike.
+	 *
+	 * @param string $failed Disabled subsystem id.
+	 */
+	private function cascade( string $failed ): void {
+		$queue = array( $failed );
+		while ( array() !== $queue ) {
+			$current = array_shift( $queue );
+			foreach ( $this->dependencies as $dependent => $needs ) {
+				if ( isset( $this->disabled[ $dependent ] ) || ! in_array( $current, $needs, true ) ) {
+					continue;
+				}
+				$this->disabled[ $dependent ] = 'dependency:' . $current;
+				if ( isset( $this->critical[ $dependent ] ) ) {
+					$this->locked_down = true;
+				}
+				$queue[] = $dependent;
+			}
+		}
 	}
 
 	/**

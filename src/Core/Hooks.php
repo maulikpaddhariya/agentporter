@@ -44,6 +44,18 @@ final class Hooks {
 	);
 
 	/**
+	 * Classes too broad to be "decisions": opting them in would hide every bug.
+	 */
+	private const TOO_BROAD = array( 'throwable', 'exception', 'error', 'runtimeexception', 'logicexception', 'errorexception', 'typeerror' );
+
+	/**
+	 * Whether guard hooks of this registrar also deny while agent access is locked down.
+	 *
+	 * @var bool
+	 */
+	private bool $agent_facing = false;
+
+	/**
 	 * Extra decision exception classes for this registrar.
 	 *
 	 * @var list<string>
@@ -73,12 +85,32 @@ final class Hooks {
 	 *
 	 * @param array $class_names Exception class names.
 	 * @return self
+	 * @throws \InvalidArgumentException For base or built-in exception classes.
 	 *
 	 * @phpstan-param list<string> $class_names
 	 */
 	public function with_decisions( array $class_names ): self {
+		foreach ( $class_names as $class_name ) {
+			$name = strtolower( ltrim( $class_name, '\\' ) );
+			if ( in_array( $name, self::TOO_BROAD, true ) || ( class_exists( $class_name, false ) && ( new \ReflectionClass( $class_name ) )->isInternal() ) ) {
+				throw new \InvalidArgumentException( 'Only specific, non-built-in exception classes can be decisions.' );
+			}
+		}
 		$clone                  = clone $this;
 		$clone->extra_decisions = array_values( array_unique( array_merge( $this->extra_decisions, $class_names ) ) );
+		return $clone;
+	}
+
+	/**
+	 * Returns a registrar whose guard hooks also deny while agent access is locked down (a
+	 * security-critical subsystem failed). Use it for agent-facing allow/deny decisions; do not use it
+	 * for the front-end request gate, which must fail open to serving the page.
+	 *
+	 * @return self
+	 */
+	public function for_agents(): self {
+		$clone               = clone $this;
+		$clone->agent_facing = true;
 		return $clone;
 	}
 
@@ -112,7 +144,9 @@ final class Hooks {
 	 * @param string   $hook          Hook name.
 	 * @param callable $callback      Callback.
 	 * @param mixed    $deny          Value returned on failure. A \Closure is called with the hook's
-	 *                                arguments to build a fresh value (for example a WP_Error).
+	 *                                arguments to build a fresh value (for example a WP_Error). Other
+	 *                                callables (such as '__return_false') are rejected: they would be
+	 *                                returned as a truthy value.
 	 * @param int      $priority      Priority.
 	 * @param int      $accepted_args Accepted arguments.
 	 */
@@ -179,10 +213,15 @@ final class Hooks {
 	 * @param callable $callback Callback.
 	 * @param mixed    $deny     Deny value or \Closure building it.
 	 * @return \Closure
+	 * @throws \InvalidArgumentException For a non-Closure callable or an unexpected object as deny value.
 	 */
 	public function wrap_guard_filter( callable $callback, $deny ): \Closure {
+		$bad_object = is_object( $deny ) && ! ( $deny instanceof \Closure ) && ! ( $deny instanceof \WP_Error );
+		if ( $bad_object || ( ! $deny instanceof \Closure && is_callable( $deny ) ) ) {
+			throw new \InvalidArgumentException( 'A guard deny value must be a Closure, a scalar, null, an array or a WP_Error.' );
+		}
 		return function ( ...$args ) use ( $callback, $deny ) {
-			if ( $this->inactive() ) {
+			if ( $this->guard_inactive() ) {
 				return $deny instanceof \Closure ? $deny( ...$args ) : $deny;
 			}
 			try {
@@ -192,8 +231,9 @@ final class Hooks {
 				return $deny instanceof \Closure ? $deny( ...$args ) : $deny;
 			}
 			// The subsystem (or a dependency) may have failed while the callback ran, for example in
-			// a nested filter it called. Its answer can no longer be trusted: deny.
-			if ( $this->inactive() ) {
+			// a nested filter it called. Its answer can no longer be trusted: deny. Do not remove this
+			// as "always false": guard_inactive() reads state the callback can change.
+			if ( $this->guard_inactive() ) {
 				return $deny instanceof \Closure ? $deny( ...$args ) : $deny;
 			}
 			return $result;
@@ -209,7 +249,7 @@ final class Hooks {
 	 */
 	public function wrap_guard_action( callable $callback, callable $on_deny ): \Closure {
 		return function ( ...$args ) use ( $callback, $on_deny ): void {
-			if ( $this->inactive() ) {
+			if ( $this->guard_inactive() ) {
 				$on_deny( ...$args );
 				return;
 			}
@@ -220,7 +260,9 @@ final class Hooks {
 				$on_deny( ...$args );
 				return;
 			}
-			if ( $this->inactive() ) {
+			// Re-check after the callback (state may have changed). Guard callbacks should only decide;
+			// do the actual work in a later hook, so a late denial has no side effects to undo.
+			if ( $this->guard_inactive() ) {
 				$on_deny( ...$args );
 			}
 		};
@@ -247,7 +289,18 @@ final class Hooks {
 	}
 
 	/**
-	 * Whether this subsystem or one of its dependencies is disabled.
+	 * Guard hooks: inactive also under lockdown when the registrar is agent-facing.
+	 *
+	 * @phpstan-impure
+	 */
+	private function guard_inactive(): bool {
+		return $this->inactive() || ( $this->agent_facing && $this->faults->is_locked_down() );
+	}
+
+	/**
+	 * Whether this subsystem or one of its dependencies is disabled. Impure: callbacks can change it.
+	 *
+	 * @phpstan-impure
 	 */
 	private function inactive(): bool {
 		if ( $this->faults->is_disabled( $this->subsystem ) ) {
