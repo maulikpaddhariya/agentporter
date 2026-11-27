@@ -169,6 +169,10 @@ final class RedactorTest extends TestCase {
 			'semicolon in value'      => array( 'password=abc;hunter2', 'hunter2' ),
 			'newline after colon'     => array( "password:\n hunter2", 'hunter2' ),
 			'ipv6 glued to key'       => array( 'remote_addr:fe80::1', 'fe80' ),
+			'escape inside quotes'    => array( 'password="a\\"b secret tail"', 'secret' ),
+			'windows path in quotes'  => array( 'password="C:\\x secret tail"', 'secret' ),
+			'escape inside single'    => array( "password='p\\'w secret tail'", 'secret' ),
+			'escaped quote in json'   => array( '{"password":"p\\"hunter2 x"} trailing', 'hunter2' ),
 		);
 	}
 

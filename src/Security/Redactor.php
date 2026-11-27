@@ -281,7 +281,7 @@ final class Redactor {
 			}
 			// Only sensitive keys scan their value, so the scan stays linear in the text length.
 			// Escaped quotes (\"…\", as in double-encoded JSON), quoted, or bare up to whitespace or '&'.
-			if ( 1 !== preg_match( '/\G(?:\\\\"(?:[^"\\\\\r\n]++|\\\\[^"])*+(?:\\\\")?|\\\\\'(?:[^\'\\\\\r\n]++|\\\\[^\'])*+(?:\\\\\')?|"(?:[^"\\\\\r\n]++|\\.)*+"?|\'(?:[^\'\\\\\r\n]++|\\.)*+\'?|[^\s&"\']++)/', $text, $v, 0, $value_start ) ) {
+			if ( 1 !== preg_match( '/\G(?:\\\\"(?:[^"\\\\\r\n]++|\\\\[^"])*+(?:\\\\")?|\\\\\'(?:[^\'\\\\\r\n]++|\\\\[^\'])*+(?:\\\\\')?|"(?:[^"\\\\\r\n]++|\\\\.)*+"?|\'(?:[^\'\\\\\r\n]++|\\\\.)*+\'?|[^\s&"\']++)/', $text, $v, 0, $value_start ) ) {
 				continue;
 			}
 			$value  = $v[0];
