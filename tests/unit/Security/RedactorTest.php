@@ -110,8 +110,8 @@ final class RedactorTest extends TestCase {
 	public function leak_corpus(): array {
 		// Fake credentials are assembled at runtime so no key-shaped literal is committed (secret scanning).
 		$aws_id = 'AKIA' . strtoupper( substr( str_repeat( 'q7zx', 4 ), 0, 16 ) );
-		$stripe = 'sk_' . 'live_' . str_repeat( 'Ab1Cd2Ef3', 3 );
-		$github = 'ghp' . '_' . str_repeat( 'A1b2C3d4E5', 4 );
+		$stripe = implode( '_', array( 'sk', 'live', str_repeat( 'Ab1Cd2Ef3', 3 ) ) );
+		$github = implode( '_', array( 'ghp', str_repeat( 'A1b2C3d4E5', 4 ) ) );
 		$aws_sk = str_repeat( 'w7Jx/K9q+Z', 4 );
 		return array(
 			'phone at sentence end'   => array( 'Call me at 9876543210.', '9876543210' ),
