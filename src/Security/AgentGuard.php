@@ -109,7 +109,7 @@ final class AgentGuard {
 	 */
 	private static function unavailable( ?AgentContext $context ): \WP_Error {
 		try {
-			$granted = self::has_grant( null !== $context ? $context->user_id : get_current_user_id(), self::CAP_READ );
+			$granted = self::has_grant( $context->user_id ?? get_current_user_id(), self::CAP_READ );
 		} catch ( \Throwable ) {
 			$granted = false;
 		}
