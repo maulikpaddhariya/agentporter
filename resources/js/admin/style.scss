@@ -1,0 +1,7 @@
+.agentporter-admin {
+	max-width: 1200px;
+
+	&[data-ready="true"] {
+		opacity: 1;
+	}
+}

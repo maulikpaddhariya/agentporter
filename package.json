@@ -1,0 +1,42 @@
+{
+	"name": "agentporter",
+	"version": "0.1.0",
+	"private": true,
+	"description": "AgentPorter admin UI build, lint and tests.",
+	"license": "GPL-2.0-or-later",
+	"engines": {
+		"node": ">=20.10.0",
+		"npm": ">=10.2.3"
+	},
+	"devDependencies": {
+		"@axe-core/playwright": "4.14.1",
+		"@playwright/test": "1.65.1",
+		"@size-limit/file": "14.3.0",
+		"@testing-library/react": "16.3.3",
+		"@types/jest": "30.0.0",
+		"@wordpress/e2e-test-utils-playwright": "3.3.0",
+		"@wordpress/env": "12.2.0",
+		"@wordpress/jest-preset-default": "14.2.0",
+		"@wordpress/scripts": "37.2.0",
+		"eslint-plugin-no-unsanitized": "4.1.5",
+		"jest": "30.5.2",
+		"jest-environment-jsdom": "30.5.2",
+		"size-limit": "14.3.0",
+		"typescript": "6.0.3"
+	},
+	"scripts": {
+		"build": "wp-scripts build resources/js/admin/index.ts --output-path=assets/build/admin",
+		"start": "wp-scripts start resources/js/admin/index.ts --output-path=assets/build/admin",
+		"lint": "npm run lint:js && npm run lint:css && npm run format:check && npm run typecheck",
+		"lint:js": "wp-scripts lint-js resources/js tests/e2e eslint.config.cjs jest.config.js babel.config.js",
+		"lint:css": "wp-scripts lint-style \"resources/js/**/*.scss\"",
+		"format": "wp-scripts format resources/js tests/e2e",
+		"format:check": "prettier --check resources/js tests/e2e",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test:unit": "jest --coverage",
+		"size": "size-limit",
+		"test:e2e": "playwright test -c tests/e2e/playwright.config.ts",
+		"env": "wp-env",
+		"test:seeded": "bash bin/check-seeded-js.sh"
+	}
+}

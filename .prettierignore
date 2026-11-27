@@ -1,0 +1,12 @@
+assets/build
+vendor
+tools
+node_modules
+coverage
+playwright-report
+test-results
+tests/seeded
+package-lock.json
+composer.lock
+*.php
+*.md

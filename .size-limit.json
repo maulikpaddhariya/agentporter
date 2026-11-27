@@ -1,0 +1,8 @@
+[
+	{
+		"name": "Admin app (gzip)",
+		"path": "assets/build/admin/index.js",
+		"limit": "60 KB",
+		"gzip": true
+	}
+]
