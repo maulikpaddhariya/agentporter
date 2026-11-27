@@ -16,8 +16,9 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Creates or upgrades the schema on activation. Idempotent: re-activation does nothing harmful.
  *
- * Network activation does not loop over every site (large networks would time out); each site
- * migrates lazily on its next admin, cron or CLI request, and new sites migrate on creation.
+ * Network activation does not loop over every site (large networks would time out). Each site
+ * migrates on its next admin visit by a site administrator, cron run, WP-CLI command, or when the
+ * network admin runs Network Admin → Upgrade Network; new sites migrate on creation.
  */
 final class Activator {
 
@@ -36,7 +37,7 @@ final class Activator {
 
 		$plugin = Plugin::instance();
 		try {
-			$plugin->container()->get( Migrator::class )->migrate();
+			$plugin->container()->get( Migrator::class )->migrate( true );
 		} catch ( \Throwable $error ) {
 			// Activation still succeeds; the next admin request retries and the fault notice explains.
 			$plugin->faults()->disable( 'migrations', $error );

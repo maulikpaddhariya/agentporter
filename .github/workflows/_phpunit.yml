@@ -65,7 +65,7 @@ jobs:
       - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ inputs.php }}
-          extensions: mysqli, sodium, mbstring, json, pdo_sqlite
+          extensions: mysqli, sodium, mbstring, json, pdo_sqlite, pcntl
           ini-values: error_reporting=-1, display_errors=On, zend.assertions=1
           coverage: none
           tools: composer:v2
@@ -99,3 +99,7 @@ jobs:
 
       - name: Integration tests
         run: composer test:integration
+
+      - name: Lock race across real processes
+        if: inputs.db-engine == 'mysql'
+        run: php tests/concurrency/lock-race.php

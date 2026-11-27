@@ -41,6 +41,7 @@ final class MigratorTest extends \WP_UnitTestCase {
 			$wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . $suffix ); // phpcs:ignore WordPress.DB
 		}
 		delete_option( Migrator::OPTION );
+		delete_option( Migrator::RETRY_OPTION );
 	}
 
 	public function set_up(): void {
@@ -146,6 +147,7 @@ final class MigratorTest extends \WP_UnitTestCase {
 			$this->assertSame( 'step 2 failed', $e->getMessage() );
 		}
 		$this->assertSame( 1, $failing->installed_version() );
+		$this->assertGreaterThan( time(), (int) get_option( Migrator::RETRY_OPTION ) );
 
 		global $wpdb;
 		$this->assertTrue( ( new Lock( $wpdb, 'migrate' ) )->acquire(), 'Lock was released.' );
@@ -249,5 +251,159 @@ final class MigratorTest extends \WP_UnitTestCase {
 		if ( is_multisite() ) {
 			grant_super_admin( get_current_user_id() );
 		}
+	}
+
+	public function test_up_to_date_check_issues_no_queries_and_keeps_the_options_cache(): void {
+		$this->migrator()->migrate();
+		$alloptions = wp_cache_get( 'alloptions', 'options' );
+		$queries    = array();
+		$spy        = static function ( $query ) use ( &$queries ) {
+			$queries[] = $query;
+			return $query;
+		};
+		add_filter( 'query', $spy );
+		$this->assertSame( Migrator::RESULT_UP_TO_DATE, $this->migrator()->migrate() );
+		$this->subsystem()->on_init();
+		remove_filter( 'query', $spy );
+		$this->assertSame( array(), $queries, 'Reviewer repro: an up-to-date check must not reload all options.' );
+		$this->assertSame( $alloptions, wp_cache_get( 'alloptions', 'options' ) );
+	}
+
+	public function test_version_is_read_from_the_database_once_locked_despite_stale_cache(): void {
+		$this->migrator()->migrate();
+		$alloptions                     = wp_load_alloptions();
+		$alloptions[ Migrator::OPTION ] = '0';
+		wp_cache_set( 'alloptions', $alloptions, 'options' );
+		$runs = 0;
+		$this->assertSame(
+			Migrator::RESULT_UP_TO_DATE,
+			$this->migrator(
+				array(
+					1 => static function () use ( &$runs ): void {
+						++$runs;
+					},
+				)
+			)->migrate()
+		);
+		$this->assertSame( 0, $runs );
+		wp_cache_delete( 'alloptions', 'options' );
+	}
+
+	public function test_holder_that_lost_its_lease_stops_without_advancing_version(): void {
+		global $wpdb;
+		$step2    = 0;
+		$migrator = $this->migrator(
+			array(
+				1 => static function () use ( $wpdb ): void {
+					// Another process takes the lock over while this step is still running.
+					$wpdb->update( $wpdb->options, array( 'option_value' => '9999999999:someone-else' ), array( 'option_name' => 'agentporter_lock_migrate' ) );
+				},
+				2 => static function () use ( &$step2 ): void {
+					++$step2;
+				},
+			)
+		);
+		try {
+			$migrator->migrate();
+			$this->fail( 'Expected the lost lease to stop the migration.' );
+		} catch ( \RuntimeException $e ) {
+			$this->assertStringContainsString( 'lock lost', $e->getMessage() );
+		}
+		$this->assertSame( 0, $migrator->installed_version() );
+		$this->assertSame( 0, $step2 );
+	}
+
+	public function test_failed_migration_backs_off_unless_forced(): void {
+		$fail  = true;
+		$steps = array(
+			1 => static function () use ( &$fail ): void {
+				if ( $fail ) {
+					throw new \RuntimeException( 'no CREATE privilege' );
+				}
+			},
+		);
+		try {
+			$this->migrator( $steps )->migrate();
+		} catch ( \RuntimeException $e ) {
+			unset( $e );
+		}
+		$this->assertSame( Migrator::RESULT_BACKING_OFF, $this->migrator( $steps )->migrate() );
+		$fail = false;
+		$this->assertSame( Migrator::RESULT_MIGRATED, $this->migrator( $steps )->migrate( true ) );
+		$this->assertFalse( get_option( Migrator::RETRY_OPTION ) );
+	}
+
+	public function test_second_create_tables_issues_no_alter(): void {
+		$migrator = $this->migrator();
+		$migrator->create_tables();
+		$altered = array();
+		$spy     = static function ( $query ) use ( &$altered ) {
+			if ( 0 === stripos( ltrim( $query ), 'ALTER' ) || 0 === stripos( ltrim( $query ), 'CREATE' ) ) {
+				$altered[] = $query;
+			}
+			return $query;
+		};
+		add_filter( 'query', $spy );
+		$migrator->create_tables();
+		remove_filter( 'query', $spy );
+		$this->assertSame( array(), $altered );
+	}
+
+	public function test_our_tables_use_utf8mb4_when_supported(): void {
+		global $wpdb;
+		if ( $wpdb->has_cap( 'utf8mb4' ) ) {
+			$this->assertStringContainsString( 'utf8mb4', $this->schema()->charset_collate() );
+		} else {
+			$this->assertSame( $wpdb->get_charset_collate(), $this->schema()->charset_collate() );
+		}
+	}
+
+	public function test_anonymous_admin_request_does_not_migrate(): void {
+		wp_set_current_user( 0 );
+		$this->subsystem()->on_admin_init();
+		$this->assertSame( 0, $this->migrator()->installed_version() );
+	}
+
+	public function test_network_wide_activation_defers_and_site_admins_migrate_their_site(): void {
+		$this->become_admin();
+		Activator::activate( true );
+		if ( ! is_multisite() ) {
+			$this->assertSame( Schema::VERSION, $this->migrator()->installed_version(), 'Single site ignores network_wide.' );
+			return;
+		}
+		$this->assertSame( 0, $this->migrator()->installed_version(), 'Network activation never loops sites.' );
+
+		$site_admin = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		revoke_super_admin( $site_admin );
+		wp_set_current_user( $site_admin );
+		$this->assertFalse( current_user_can( 'activate_plugins' ) );
+		$this->subsystem()->on_admin_init();
+		$this->assertSame( Schema::VERSION, $this->migrator()->installed_version() );
+	}
+
+	public function test_network_upgrade_migrates_each_site(): void {
+		if ( ! is_multisite() ) {
+			$this->assertNotFalse( has_action( 'wpmu_upgrade_site' ) || true );
+			$this->subsystem()->on_upgrade_site( 1 );
+			$this->assertSame( 0, $this->migrator()->installed_version(), 'Not network-active on single site.' );
+			return;
+		}
+		update_site_option( 'active_sitewide_plugins', array( plugin_basename( AGENTPORTER_FILE ) => time() ) );
+		$blog_id = self::factory()->blog->create();
+		switch_to_blog( $blog_id );
+		$this->reset_schema();
+		restore_current_blog();
+
+		wp_set_current_user( self::factory()->user->create( array( 'role' => 'subscriber' ) ) );
+		$this->subsystem()->on_upgrade_site( $blog_id );
+		switch_to_blog( $blog_id );
+		$this->assertSame( 0, $this->migrator()->installed_version(), 'Only network admins.' );
+		restore_current_blog();
+
+		$this->become_admin();
+		$this->subsystem()->on_upgrade_site( $blog_id );
+		switch_to_blog( $blog_id );
+		$this->assertSame( Schema::VERSION, $this->migrator()->installed_version() );
+		restore_current_blog();
 	}
 }

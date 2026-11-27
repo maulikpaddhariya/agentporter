@@ -13,8 +13,10 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * Runs pending migrations only where a database write is acceptable: plugin activation, wp-admin
- * requests by users who can activate plugins, WP-Cron and WP-CLI, and new sites on a network.
- * Front-end visitor requests never trigger a migration (no request-time writes).
+ * requests by users who manage the site (plugin managers; on a network, also the site's own
+ * administrators), WP-Cron and WP-CLI, Network Admin → Upgrade Network, and new network sites.
+ * Front-end page views, REST and anonymous admin-ajax never trigger a migration. The up-to-date
+ * check is a cached option read, so these hooks cost nothing once the schema is current.
  */
 final class MigrationSubsystem implements Subsystem {
 
@@ -54,13 +56,15 @@ final class MigrationSubsystem implements Subsystem {
 		$hooks->add_action( 'admin_init', array( $this, 'on_admin_init' ) );
 		$hooks->add_action( 'init', array( $this, 'on_init' ) );
 		$hooks->add_action( 'wp_initialize_site', array( $this, 'on_initialize_site' ), 20 );
+		$hooks->add_action( 'wpmu_upgrade_site', array( $this, 'on_upgrade_site' ) );
 	}
 
 	/**
 	 * Admin requests: migrate when the current user can activate plugins.
 	 */
 	public function on_admin_init(): void {
-		if ( current_user_can( 'activate_plugins' ) ) {
+		$can = current_user_can( 'activate_plugins' ) || ( is_multisite() && current_user_can( 'manage_options' ) );
+		if ( $can ) {
 			$this->migrator()->migrate();
 		}
 	}
@@ -69,8 +73,9 @@ final class MigrationSubsystem implements Subsystem {
 	 * Cron and CLI requests: migrate. Front-end visitor requests: never.
 	 */
 	public function on_init(): void {
-		if ( wp_doing_cron() || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
-			$this->migrator()->migrate();
+		$cli = defined( 'WP_CLI' ) && WP_CLI;
+		if ( $cli || wp_doing_cron() ) {
+			$this->migrator()->migrate( $cli );
 		}
 	}
 
@@ -85,7 +90,26 @@ final class MigrationSubsystem implements Subsystem {
 		}
 		switch_to_blog( (int) $site->blog_id );
 		try {
-			$this->migrator()->migrate();
+			$this->migrator()->migrate( true );
+		} finally {
+			restore_current_blog();
+		}
+	}
+
+	/**
+	 * Network Admin → Upgrade Network fires this once per site (from the network admin, without
+	 * switching): migrate that site. Only reachable by network admins.
+	 *
+	 * @param mixed $blog_id Site id.
+	 */
+	public function on_upgrade_site( $blog_id ): void {
+		$blog_id = (int) $blog_id;
+		if ( $blog_id <= 0 || ! self::is_network_active() || ! current_user_can( 'manage_network' ) || null === get_site( $blog_id ) ) {
+			return;
+		}
+		switch_to_blog( $blog_id );
+		try {
+			$this->migrator()->migrate( true );
 		} finally {
 			restore_current_blog();
 		}

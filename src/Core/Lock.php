@@ -18,7 +18,10 @@ defined( 'ABSPATH' ) || exit;
  * racing past its existence check would both "acquire" the lock. Here acquisition is a single
  * INSERT IGNORE whose affected-row count says who won; a stale lock (past its expiry) is taken over
  * with a compare-and-swap UPDATE on the old value, so only one process can win that race too.
- * Release deletes the row only if it still holds our token.
+ * Release deletes the row only if it still holds our token. Long-running holders call renew() between
+ * steps; if the lock was taken over (the holder outlived its TTL), renew() fails and the holder must
+ * stop. A lock stamped with an expiry further in the future than one TTL (clock skew, a node with a
+ * wrong clock) counts as stale, so a bad clock can never block migrations forever.
  *
  * Works on MySQL, MariaDB and the WordPress SQLite integration. Lock rows are never autoloaded.
  */
@@ -58,11 +61,12 @@ final class Lock {
 	 *
 	 * @param int|null $now Current Unix time (tests).
 	 * @return bool True if this instance now holds the lock.
+	 * @throws \RuntimeException When the database refuses the write (not mere contention).
 	 */
 	public function acquire( ?int $now = null ): bool {
 		$wpdb = $this->wpdb;
 		if ( null !== $this->token ) {
-			return true;
+			return $this->renew( $now );
 		}
 		$now   = $now ?? time();
 		$token = $this->make_token( $now );
@@ -76,13 +80,17 @@ final class Lock {
 				$token
 			)
 		);
+		if ( false === $inserted ) {
+			// A database error (read-only, missing privilege) must surface as a fault, not as "locked".
+			throw new \RuntimeException( 'The lock could not be written.' );
+		}
 		if ( 1 === $inserted ) {
 			return $this->won( $token );
 		}
 
-		// Someone holds it. Take over only if their lock has expired, and only if nobody else did first.
+		// Someone holds it. Take over only if their lock is stale, and only if nobody else did first.
 		$current = $this->read();
-		if ( null === $current || $this->expires_at( $current ) > $now ) {
+		if ( null === $current || ! $this->is_stale( $current, $now ) ) {
 			return false;
 		}
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Compare-and-swap on the stale value.
@@ -96,6 +104,36 @@ final class Lock {
 			)
 		);
 		return 1 === $swapped ? $this->won( $token ) : false;
+	}
+
+	/**
+	 * Extends a held lock by one TTL. Returns false (and forgets the token) if the lock was taken over.
+	 *
+	 * @param int|null $now Current Unix time (tests).
+	 */
+	public function renew( ?int $now = null ): bool {
+		if ( null === $this->token ) {
+			return false;
+		}
+		$wpdb  = $this->wpdb;
+		$token = $this->make_token( $now ?? time() );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Compare-and-swap on our own token.
+		$swapped = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET option_value = %s WHERE option_name = %s AND option_value = %s',
+				$wpdb->options,
+				$token,
+				$this->option,
+				$this->token
+			)
+		);
+		if ( 1 !== $swapped ) {
+			$this->token = null;
+			return false;
+		}
+		$this->token = $token;
+		$this->flush_option_cache();
+		return true;
 	}
 
 	/**
@@ -163,6 +201,17 @@ final class Lock {
 	 */
 	private function make_token( int $now ): string {
 		return ( $now + $this->ttl ) . ':' . bin2hex( random_bytes( 16 ) );
+	}
+
+	/**
+	 * Whether a stored lock value is stale: expired, malformed, or stamped further ahead than one TTL.
+	 *
+	 * @param string $value Stored value.
+	 * @param int    $now   Current Unix time.
+	 */
+	private function is_stale( string $value, int $now ): bool {
+		$expires = $this->expires_at( $value );
+		return $expires <= $now || $expires > $now + $this->ttl;
 	}
 
 	/**

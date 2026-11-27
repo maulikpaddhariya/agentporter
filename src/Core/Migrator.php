@@ -15,17 +15,23 @@ defined( 'ABSPATH' ) || exit;
  * Brings the per-site schema up to {@see Schema::VERSION}.
  *
  * Concurrency: a non-blocking {@see Lock} ensures only one process migrates; others return
- * RESULT_LOCKED immediately and try again on a later request. The installed version is re-read
- * after the lock is taken (double-checked), so a process that waited on a stale read does no work.
- * The version option is advanced after each successful step, so a failed step is retried later.
+ * RESULT_LOCKED immediately and try again on a later request. The cheap "anything to do?" check uses
+ * the normal cached option (it never evicts the shared options cache); after the lock is taken the
+ * version is read straight from the database, so a process that saw a stale value does no work.
+ * The lease is renewed before every step and before the version is advanced; a holder that lost its
+ * lease stops without advancing the version. A failed step is retried later, after a back-off.
  */
 final class Migrator {
 
 	public const OPTION = 'agentporter_db_version';
 
-	public const RESULT_UP_TO_DATE = 'up_to_date';
-	public const RESULT_MIGRATED   = 'migrated';
-	public const RESULT_LOCKED     = 'locked';
+	public const RESULT_UP_TO_DATE  = 'up_to_date';
+	public const RESULT_MIGRATED    = 'migrated';
+	public const RESULT_LOCKED      = 'locked';
+	public const RESULT_BACKING_OFF = 'backing_off';
+
+	public const RETRY_OPTION = 'agentporter_migration_retry_at';
+	public const BACKOFF      = 900;
 
 	/**
 	 * Migration steps keyed by the schema version they produce.
@@ -71,12 +77,20 @@ final class Migrator {
 	}
 
 	/**
-	 * Installed schema version, read past the object cache.
+	 * Installed schema version as WordPress currently sees it (cached; cheap on every request).
 	 */
 	public function installed_version(): int {
-		wp_cache_delete( self::OPTION, 'options' );
-		wp_cache_delete( 'alloptions', 'options' );
 		$value = get_option( self::OPTION, 0 );
+		return is_numeric( $value ) ? (int) $value : 0;
+	}
+
+	/**
+	 * Installed schema version read straight from the database (used only while holding the lock).
+	 */
+	private function stored_version(): int {
+		$wpdb = $this->wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- Authoritative read under the lock; caches may be stale.
+		$value = $wpdb->get_var( $wpdb->prepare( 'SELECT option_value FROM %i WHERE option_name = %s', $wpdb->options, self::OPTION ) );
 		return is_numeric( $value ) ? (int) $value : 0;
 	}
 
@@ -90,30 +104,54 @@ final class Migrator {
 	/**
 	 * Runs pending migrations.
 	 *
+	 * @param bool $force Ignore the back-off after a recent failure (activation, network upgrade, CLI).
 	 * @return string One of the RESULT_* constants.
-	 * @throws \Throwable When a step fails; the lock is released and the version is not advanced.
+	 * @throws \Throwable When a step fails or the lease is lost; the lock is released, the version is
+	 *                    not advanced and a back-off is recorded.
 	 */
-	public function migrate(): string {
+	public function migrate( bool $force = false ): string {
 		if ( ! $this->needs_migration() ) {
 			return self::RESULT_UP_TO_DATE;
+		}
+		if ( ! $force && (int) get_option( self::RETRY_OPTION, 0 ) > time() ) {
+			return self::RESULT_BACKING_OFF;
 		}
 		if ( ! $this->lock->acquire() ) {
 			return self::RESULT_LOCKED;
 		}
 		try {
-			$installed = $this->installed_version();
+			$installed = $this->stored_version();
 			$ran       = false;
 			foreach ( $this->steps as $version => $step ) {
 				if ( $version <= $installed ) {
 					continue;
 				}
+				$this->keep_lease();
 				$step();
+				$this->keep_lease();
 				update_option( self::OPTION, (string) $version, true );
 				$ran = true;
 			}
+			if ( $ran ) {
+				delete_option( self::RETRY_OPTION );
+			}
 			return $ran ? self::RESULT_MIGRATED : self::RESULT_UP_TO_DATE;
+		} catch ( \Throwable $error ) {
+			update_option( self::RETRY_OPTION, (string) ( time() + self::BACKOFF ), false );
+			throw $error;
 		} finally {
 			$this->lock->release();
+		}
+	}
+
+	/**
+	 * Renews the lease or stops: another process took over after our TTL ran out.
+	 *
+	 * @throws \RuntimeException When the lease was lost.
+	 */
+	private function keep_lease(): void {
+		if ( ! $this->lock->renew() ) {
+			throw new \RuntimeException( 'Migration lock lost; another process is migrating.' );
 		}
 	}
 
@@ -125,7 +163,14 @@ final class Migrator {
 	public function create_tables(): void {
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		$statements = $this->schema->create_statements();
-		dbDelta( array_values( $statements ) );
+
+		// Never print SQL errors (and paths) to a visitor, even with WP_DEBUG_DISPLAY on.
+		$suppress = $this->wpdb->suppress_errors( true );
+		try {
+			dbDelta( array_values( $statements ) );
+		} finally {
+			$this->wpdb->suppress_errors( $suppress );
+		}
 
 		foreach ( array_keys( $statements ) as $table ) {
 			if ( ! $this->table_exists( $table ) ) {
