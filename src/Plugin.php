@@ -54,16 +54,20 @@ final class Plugin {
 	/**
 	 * Constructor.
 	 *
-	 * @param Container $container  Service container.
-	 * @param Faults    $faults     Failure state.
-	 * @param array     $subsystems Subsystem classes, in boot order.
+	 * @param Container $container        Service container.
+	 * @param Faults    $faults           Failure state.
+	 * @param array     $subsystems       Subsystem classes, in boot order.
+	 * @param array     $critical_classes Subsystem classes whose failure, for any reason (including the
+	 *                                    class failing to load), locks agent access down.
 	 *
 	 * @phpstan-param list<class-string<Subsystem>> $subsystems
+	 * @phpstan-param list<class-string<Subsystem>> $critical_classes
 	 */
 	public function __construct(
 		private Container $container,
 		private Faults $faults,
-		private array $subsystems
+		private array $subsystems,
+		private array $critical_classes = array()
 	) {
 	}
 
@@ -78,7 +82,7 @@ final class Plugin {
 			$container->set( \wpdb::class, static fn(): \wpdb => $GLOBALS['wpdb'] );
 			$container->set( Logger::class, static fn(): Logger => new Logger() );
 			$container->set( Faults::class, static fn( Container $c ): Faults => new Faults( $c->get( Logger::class ) ) );
-			self::$instance = new self( $container, $container->get( Faults::class ), self::default_subsystems() );
+			self::$instance = new self( $container, $container->get( Faults::class ), self::default_subsystems(), self::critical_subsystems() );
 		}
 		return self::$instance;
 	}
@@ -94,6 +98,16 @@ final class Plugin {
 	}
 
 	/**
+	 * Security-critical subsystems, declared here rather than read from the class, so that a class
+	 * that fails to load still triggers lockdown.
+	 *
+	 * @return list<class-string<Subsystem>>
+	 */
+	public static function critical_subsystems(): array {
+		return array();
+	}
+
+	/**
 	 * Boots every subsystem. Safe to call more than once.
 	 */
 	public function boot(): void {
@@ -104,11 +118,13 @@ final class Plugin {
 
 		( new FaultNotice( $this->faults ) )->register();
 
+		// Failure listeners run only after the container is sealed, so they cannot register services.
+		$this->faults->begin_deferral();
 		foreach ( $this->subsystems as $class_name ) {
 			$this->boot_one( $class_name );
 		}
-
 		$this->container->seal();
+		$this->faults->end_deferral();
 
 		try {
 			/**
@@ -126,7 +142,9 @@ final class Plugin {
 			);
 		} catch ( \Throwable $error ) {
 			// A third-party listener must never take the site down.
-			unset( $error );
+			if ( $this->container->has( Logger::class ) ) {
+				$this->container->get( Logger::class )->error( 'agentporter_booted listener threw ' . Faults::class_name( $error ) );
+			}
 		}
 	}
 
@@ -140,10 +158,13 @@ final class Plugin {
 		// Until a subsystem proves a valid, unique id, failures are recorded under "class:<name>", which
 		// the id pattern can never match, so a bad subsystem cannot disable another by claiming its id.
 		$fault_id = 'class:' . $class_name;
-		$critical = is_subclass_of( $class_name, SecurityCritical::class );
+		$critical = in_array( $class_name, $this->critical_classes, true );
 		$snapshot = $this->container->ids();
 
 		try {
+			// Anything that can autoload the class (and so throw) stays inside the boundary.
+			$critical = $critical || is_subclass_of( $class_name, SecurityCritical::class );
+
 			[ $subsystem, $id ] = $this->instantiate( $class_name );
 			$fault_id           = $id;
 			if ( $critical ) {

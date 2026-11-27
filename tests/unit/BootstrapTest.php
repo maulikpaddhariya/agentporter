@@ -49,7 +49,7 @@ final class BootstrapTest extends TestCase {
 	public function test_second_copy_loads_nothing_and_names_both_copies(): void {
 		$report = $this->load( '6.9', 'duplicate' );
 		$this->assertTrue( $report['booted'], 'The first copy keeps running.' );
-		$this->assertSame( array( 'admin_notices', 'activation' ), $report['second_hooks'] );
+		$this->assertSame( array( 'admin_notices', 'network_admin_notices', 'activation' ), $report['second_hooks'] );
 		$this->assertStringContainsString( 'Two copies of AgentPorter are installed', $report['notices'] );
 		$this->assertStringContainsString( 'agentporter-copy-', $report['notices'] );
 	}

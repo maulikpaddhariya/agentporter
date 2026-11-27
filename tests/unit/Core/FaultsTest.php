@@ -88,4 +88,23 @@ final class FaultsTest extends TestCase {
 		$faults->disable( 'tracking', new \RuntimeException( 'x' ) );
 		$this->assertFalse( $faults->is_locked_down() );
 	}
+
+	public function test_anonymous_exception_class_is_recorded_without_path_or_nul(): void {
+		$faults = new Faults( new Logger( true ) );
+		$faults->disable( 'tracking', new class( 'x' ) extends \RuntimeException {} );
+		$class = $faults->disabled()['tracking'];
+		$this->assertStringNotContainsString( "\0", $class );
+		$this->assertStringNotContainsString( '/', $class );
+		$this->assertStringEndsWith( '@anonymous', $class );
+		$this->assertStringContainsString( 'subsystem "tracking" disabled', (string) file_get_contents( $this->log_file ) );
+	}
+
+	public function test_failure_actions_are_deferred_until_boot_ends(): void {
+		$faults = new Faults( new Logger( false ) );
+		$faults->begin_deferral();
+		$faults->disable( 'a', new \RuntimeException( 'x' ) );
+		$this->assertSame( 0, did_action( 'agentporter_subsystem_failed' ) );
+		$faults->end_deferral();
+		$this->assertSame( 1, did_action( 'agentporter_subsystem_failed' ) );
+	}
 }

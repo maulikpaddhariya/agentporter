@@ -34,19 +34,18 @@ if ( defined( 'AGENTPORTER_VERSION' ) ) {
 				basename( __DIR__ )
 			);
 		};
-		add_action(
-			'admin_notices',
-			static function () use ( $agentporter_duplicate_message ) {
-				agentporter_print_plugins_screen_notice( $agentporter_duplicate_message() );
-			}
-		);
+		$agentporter_duplicate_notice  = static function () use ( $agentporter_duplicate_message ) {
+			agentporter_print_plugins_screen_notice( $agentporter_duplicate_message() );
+		};
+		add_action( 'admin_notices', $agentporter_duplicate_notice );
+		add_action( 'network_admin_notices', $agentporter_duplicate_notice );
 		register_activation_hook(
 			__FILE__,
 			static function () use ( $agentporter_duplicate_message ) {
 				wp_die( esc_html( $agentporter_duplicate_message() ), '', array( 'back_link' => true ) );
 			}
 		);
-		unset( $agentporter_duplicate_message );
+		unset( $agentporter_duplicate_message, $agentporter_duplicate_notice );
 	}
 	return;
 }

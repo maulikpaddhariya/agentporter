@@ -229,4 +229,63 @@ final class HooksTest extends TestCase {
 		$this->assertFalse( Hooks::is_decision( new \RuntimeException( 'x' ) ) );
 		$this->assertTrue( Hooks::is_decision( new DenyDecision( 'x' ) ) );
 	}
+
+	public function test_guard_filter_denies_when_subsystem_disabled_during_its_own_callback(): void {
+		$hooks = new Hooks( 'guard', $this->faults );
+		$inner = $hooks->wrap_filter(
+			static function () {
+				throw new \RuntimeException( 'nested adapter failed' );
+			}
+		);
+		$guard = $hooks->wrap_guard_filter( static fn() => $inner( true ), false );
+		$this->assertFalse( $guard( null ), 'Reviewer repro: the answer computed while failing must not be trusted.' );
+	}
+
+	public function test_guard_filter_denies_when_dependency_disabled_during_callback(): void {
+		$dependency = ( new Hooks( 'serve', $this->faults ) )->wrap_filter(
+			static function () {
+				throw new \RuntimeException( 'x' );
+			}
+		);
+		$guard      = ( new Hooks( 'policy', $this->faults, array( 'serve' ) ) )->wrap_guard_filter( static fn() => $dependency( true ), false );
+		$this->assertFalse( $guard( null ) );
+	}
+
+	public function test_guard_action_runs_deny_handler_when_disabled_during_callback(): void {
+		$denied = 0;
+		$hooks  = new Hooks( 'guard', $this->faults );
+		$inner  = $hooks->wrap_action(
+			static function () {
+				throw new \RuntimeException( 'x' );
+			}
+		);
+		$hooks->wrap_guard_action(
+			static function () use ( $inner ) {
+				$inner();
+			},
+			static function () use ( &$denied ) {
+				++$denied;
+			}
+		)();
+		$this->assertSame( 1, $denied );
+	}
+
+	public function test_woocommerce_exceptions_are_faults_unless_opted_in(): void {
+		if ( ! class_exists( 'WC_Data_Exception' ) ) {
+			eval( 'class WC_Data_Exception extends Exception {}' ); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- Test double for a WooCommerce class name.
+		}
+		$throw = static function () {
+			throw new \WC_Data_Exception( 'bad data' );
+		};
+		( new Hooks( 'tracking', $this->faults ) )->wrap_action( $throw )();
+		$this->assertTrue( $this->faults->is_disabled( 'tracking' ), 'By default a WooCommerce exception is a fault.' );
+
+		$checkout = ( new Hooks( 'checkout-policy', $this->faults ) )->with_decisions( array( 'WC_Data_Exception' ) );
+		try {
+			$checkout->wrap_action( $throw )();
+			$this->fail( 'Opted-in decision must propagate.' );
+		} catch ( \WC_Data_Exception $e ) {
+			$this->assertFalse( $this->faults->is_disabled( 'checkout-policy' ) );
+		}
+	}
 }

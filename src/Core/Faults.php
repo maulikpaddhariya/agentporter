@@ -42,6 +42,20 @@ final class Faults {
 	private bool $locked_down = false;
 
 	/**
+	 * While true, failure actions are queued instead of fired (during boot, before the container is sealed).
+	 *
+	 * @var bool
+	 */
+	private bool $deferring = false;
+
+	/**
+	 * Queued failure actions: [subsystem id, exception class].
+	 *
+	 * @var list<array{0: string, 1: string}>
+	 */
+	private array $queued = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Logger $logger Debug logger.
@@ -88,20 +102,55 @@ final class Faults {
 		if ( isset( $this->disabled[ $subsystem ] ) ) {
 			return;
 		}
-		$this->disabled[ $subsystem ] = get_class( $error );
+		$class                        = self::class_name( $error );
+		$this->disabled[ $subsystem ] = $class;
 
 		// Never log the exception message (it may carry tokens, emails or request data) or absolute paths.
 		$this->logger->error(
 			sprintf(
 				'subsystem "%s" disabled for this request: %s at %s:%d%s',
 				$subsystem,
-				get_class( $error ),
+				$class,
 				self::relative_path( $error->getFile() ),
 				$error->getLine(),
 				$this->locked_down ? ' (agent access locked down)' : ''
 			)
 		);
 
+		if ( $this->deferring ) {
+			$this->queued[] = array( $subsystem, $class );
+			return;
+		}
+		$this->fire( $subsystem, $class );
+	}
+
+	/**
+	 * Queues failure actions until {@see end_deferral()} (used during boot so listeners cannot
+	 * register services before the container is sealed).
+	 */
+	public function begin_deferral(): void {
+		$this->deferring = true;
+	}
+
+	/**
+	 * Fires queued failure actions and stops queueing.
+	 */
+	public function end_deferral(): void {
+		$this->deferring = false;
+		$queued          = $this->queued;
+		$this->queued    = array();
+		foreach ( $queued as $item ) {
+			$this->fire( $item[0], $item[1] );
+		}
+	}
+
+	/**
+	 * Fires the failure action; listener errors never escape.
+	 *
+	 * @param string $subsystem       Subsystem id.
+	 * @param string $exception_class Exception class name.
+	 */
+	private function fire( string $subsystem, string $exception_class ): void {
 		try {
 			/**
 			 * Fires when AgentPorter disables a subsystem for the rest of the request after an exception.
@@ -109,10 +158,21 @@ final class Faults {
 			 * @param string $subsystem       Subsystem id.
 			 * @param string $exception_class Exception class name (never the message).
 			 */
-			do_action( 'agentporter_subsystem_failed', $subsystem, get_class( $error ) );
+			do_action( 'agentporter_subsystem_failed', $subsystem, $exception_class );
 		} catch ( \Throwable $listener_error ) {
-			$this->logger->error( 'agentporter_subsystem_failed listener threw ' . get_class( $listener_error ) );
+			$this->logger->error( 'agentporter_subsystem_failed listener threw ' . self::class_name( $listener_error ) );
 		}
+	}
+
+	/**
+	 * Exception class name safe to log: anonymous classes lose the NUL byte and file path PHP appends.
+	 *
+	 * @param \Throwable $error Thrown value.
+	 */
+	public static function class_name( \Throwable $error ): string {
+		$name = get_class( $error );
+		$pos  = strpos( $name, '@anonymous' );
+		return false === $pos ? $name : substr( $name, 0, $pos + strlen( '@anonymous' ) );
 	}
 
 	/**

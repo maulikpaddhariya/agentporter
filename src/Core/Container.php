@@ -86,8 +86,12 @@ final class Container {
 	 * @param array $snapshot Result of ids() taken earlier.
 	 *
 	 * @phpstan-param list<string> $snapshot
+	 * @throws ContainerException When the container is sealed.
 	 */
 	public function rollback( array $snapshot ): void {
+		if ( $this->sealed ) {
+			throw new ContainerException( 'The container is sealed.' );
+		}
 		$keep = array_flip( $snapshot );
 		foreach ( $this->ids() as $id ) {
 			if ( ! isset( $keep[ $id ] ) ) {

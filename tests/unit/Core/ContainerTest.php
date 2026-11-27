@@ -100,4 +100,16 @@ final class ContainerTest extends TestCase {
 		$this->assertTrue( $container->has( \ArrayObject::class ) );
 		$this->assertFalse( $container->has( \SplStack::class ) );
 	}
+
+	public function test_rollback_is_refused_after_seal(): void {
+		$container = new Container();
+		$container->set( \ArrayObject::class, static fn() => new \ArrayObject() );
+		$container->seal();
+		try {
+			$container->rollback( array() );
+			$this->fail( 'Expected refusal.' );
+		} catch ( ContainerException $e ) {
+			$this->assertTrue( $container->has( \ArrayObject::class ) );
+		}
+	}
 }

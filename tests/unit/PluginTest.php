@@ -16,6 +16,7 @@ use AgentPorter\Tests\Unit\Fixtures;
 use Brain\Monkey\Actions;
 
 require_once __DIR__ . '/Fixtures/Subsystems.php';
+require_once __DIR__ . '/Fixtures/broken-autoload.php';
 
 /**
  * @covers \AgentPorter\Plugin
@@ -33,10 +34,11 @@ final class PluginTest extends TestCase {
 	 * Builds a plugin with the given subsystems.
 	 *
 	 * @param array $subsystems Subsystem classes.
+	 * @param array $critical   Critical subsystem classes.
 	 */
-	private function plugin( array $subsystems ): Plugin {
+	private function plugin( array $subsystems, array $critical = array() ): Plugin {
 		$this->container = new Container();
-		return new Plugin( $this->container, new Faults( new Logger( false ) ), $subsystems );
+		return new Plugin( $this->container, new Faults( new Logger( false ) ), $subsystems, $critical );
 	}
 
 	public function test_failing_subsystems_are_disabled_and_others_boot(): void {
@@ -160,5 +162,41 @@ final class PluginTest extends TestCase {
 		$plugin = Plugin::instance();
 		$this->assertSame( $plugin, Plugin::instance() );
 		$this->assertSame( $plugin->faults(), $plugin->container()->get( Faults::class ) );
+	}
+
+	public function test_subsystem_classes_that_fail_to_load_are_disabled_and_others_boot(): void {
+		$plugin = $this->plugin(
+			array(
+				'AgentPorter\\Tests\\Broken\\MissingInterfaceSubsystem',
+				'AgentPorter\\Tests\\Broken\\TopLevelThrowSubsystem',
+				'AgentPorter\\Tests\\Broken\\ParseErrorSubsystem',
+				Fixtures\GoodSubsystem::class,
+			)
+		);
+		$plugin->boot();
+		$this->assertSame( array( 'good' ), $plugin->booted_subsystems() );
+		$this->assertCount( 3, $plugin->faults()->disabled() );
+		$this->assertFalse( $plugin->faults()->is_locked_down() );
+	}
+
+	public function test_unloadable_critical_subsystem_locks_down(): void {
+		$missing = 'AgentPorter\\Tests\\Broken\\GuardThatWasDeleted';
+		$plugin  = $this->plugin( array( $missing, Fixtures\GoodSubsystem::class ), array( $missing ) );
+		$plugin->boot();
+		$this->assertTrue( $plugin->faults()->is_locked_down() );
+		$this->assertSame( array( 'good' ), $plugin->booted_subsystems() );
+	}
+
+	public function test_failure_listener_during_boot_cannot_register_services(): void {
+		$container = null;
+		\Brain\Monkey\Actions\expectDone( 'agentporter_subsystem_failed' )->once()->whenHappen(
+			function () use ( &$container ) {
+				$this->container->set( \SplQueue::class, static fn() => new \SplQueue() );
+			}
+		);
+		$plugin = $this->plugin( array( Fixtures\ThrowsOnRegisterSubsystem::class, Fixtures\GoodSubsystem::class ) );
+		$plugin->boot();
+		$this->assertFalse( $this->container->has( \SplQueue::class ), 'Listener ran after the seal, so set() was refused.' );
+		$this->assertSame( array( 'good' ), $plugin->booted_subsystems() );
 	}
 }

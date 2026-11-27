@@ -23,23 +23,32 @@ defined( 'ABSPATH' ) || exit;
  *   once the subsystem (or a dependency) is disabled, filters return the deny value and actions run
  *   the deny handler. They fail closed, never open.
  *
- * Exceptions that WordPress, WooCommerce or AgentPorter use deliberately as control flow (for
- * example a Store API RouteException that rejects a checkout) are rethrown unchanged and never
+ * Exceptions used deliberately as control flow (AgentPorter's DecisionException, WordPress' die
+ * exceptions, and any classes opted in with with_decisions()) are rethrown unchanged and never
  * disable the subsystem.
+ *
+ * Deny Closures passed to guard hooks must not throw; if one does, the exception escapes and the
+ * request fails (closed).
  */
 final class Hooks {
 
 	/**
-	 * Exception classes that are decisions, not faults. Checked by name so the classes need not exist.
+	 * Exception classes that are always decisions, not faults. Checked by name so they need not exist.
+	 * Other classes (for example WooCommerce's RouteException) are opted in per registrar with
+	 * {@see with_decisions()}, because elsewhere they usually signal a fault.
 	 */
 	private const DECISION_EXCEPTIONS = array(
 		'WPDieException',
 		'WPAjaxDieContinueException',
 		'WPAjaxDieStopException',
-		'WC_Data_Exception',
-		'WC_REST_Exception',
-		'Automattic\\WooCommerce\\StoreApi\\Exceptions\\RouteException',
 	);
+
+	/**
+	 * Extra decision exception classes for this registrar.
+	 *
+	 * @var list<string>
+	 */
+	private array $extra_decisions = array();
 
 	/**
 	 * Constructor.
@@ -55,6 +64,22 @@ final class Hooks {
 		private Faults $faults,
 		private array $dependencies = array()
 	) {
+	}
+
+	/**
+	 * Returns a registrar that also treats the given exception classes as deliberate decisions
+	 * (rethrown, subsystem not disabled). Use for hooks where WordPress or WooCommerce documents
+	 * throwing as the way to reject, for example Store API validation hooks.
+	 *
+	 * @param array $class_names Exception class names.
+	 * @return self
+	 *
+	 * @phpstan-param list<string> $class_names
+	 */
+	public function with_decisions( array $class_names ): self {
+		$clone                  = clone $this;
+		$clone->extra_decisions = array_values( array_unique( array_merge( $this->extra_decisions, $class_names ) ) );
+		return $clone;
 	}
 
 	/**
@@ -161,11 +186,17 @@ final class Hooks {
 				return $deny instanceof \Closure ? $deny( ...$args ) : $deny;
 			}
 			try {
-				return $callback( ...$args );
+				$result = $callback( ...$args );
 			} catch ( \Throwable $error ) {
 				$this->fault( $error );
 				return $deny instanceof \Closure ? $deny( ...$args ) : $deny;
 			}
+			// The subsystem (or a dependency) may have failed while the callback ran, for example in
+			// a nested filter it called. Its answer can no longer be trusted: deny.
+			if ( $this->inactive() ) {
+				return $deny instanceof \Closure ? $deny( ...$args ) : $deny;
+			}
+			return $result;
 		};
 	}
 
@@ -187,6 +218,10 @@ final class Hooks {
 			} catch ( \Throwable $error ) {
 				$this->fault( $error );
 				$on_deny( ...$args );
+				return;
+			}
+			if ( $this->inactive() ) {
+				$on_deny( ...$args );
 			}
 		};
 	}
@@ -195,12 +230,15 @@ final class Hooks {
 	 * Whether a throwable is a deliberate control-flow decision.
 	 *
 	 * @param \Throwable $error Thrown value.
+	 * @param array      $extra Extra decision classes.
+	 *
+	 * @phpstan-param list<string> $extra
 	 */
-	public static function is_decision( \Throwable $error ): bool {
+	public static function is_decision( \Throwable $error, array $extra = array() ): bool {
 		if ( $error instanceof DecisionException ) {
 			return true;
 		}
-		foreach ( self::DECISION_EXCEPTIONS as $class_name ) {
+		foreach ( array_merge( self::DECISION_EXCEPTIONS, $extra ) as $class_name ) {
 			if ( is_a( $error, $class_name ) ) {
 				return true;
 			}
@@ -230,7 +268,7 @@ final class Hooks {
 	 * @throws \Throwable The same throwable when it is a deliberate decision.
 	 */
 	private function fault( \Throwable $error ): void {
-		if ( self::is_decision( $error ) ) {
+		if ( self::is_decision( $error, $this->extra_decisions ) ) {
 			throw $error;
 		}
 		$this->faults->disable( $this->subsystem, $error );
